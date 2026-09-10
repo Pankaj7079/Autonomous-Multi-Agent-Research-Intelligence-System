@@ -1,0 +1,134 @@
+# AMARIS — project + tooling definition.
+# uv is the only supported package manager here. `uv sync` installs the core
+# stack; the heavyweight extras are opt-in on purpose (see ADR-009).
+
+[project]
+name = "amaris"
+version = "0.1.0"
+description = "AMARIS — Autonomous Multi-Agent Research Intelligence System"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+license = { text = "MIT" }
+authors = [{ name = "Pankaj" }]
+
+dependencies = [
+    # orchestration
+    "langgraph>=0.3.0",
+    "langchain>=0.3.0",
+    "langchain-core>=0.3.0",
+    "langgraph-checkpoint-sqlite>=2.0.0",
+
+    # llm providers — all free tier, no card
+    "langchain-groq>=0.2.0",
+    "langchain-google-genai>=2.0.0",
+    "langchain-cerebras>=0.5.0",
+
+    # search (ddgs is the maintained rename of duckduckgo-search — see ADR-006)
+    "ddgs>=9.0.0",
+
+    # ops / storage clients that must exist in every deployment mode
+    "redis[hiredis]>=5.0.0",
+    "qdrant-client>=1.12.0",
+
+    # backend
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "websockets>=13.0",
+    "httpx>=0.27.0",
+
+    # frontend
+    "streamlit>=1.40.0",
+
+    # utils
+    "pydantic>=2.9.0",
+    "pydantic-settings>=2.6.0",
+    "python-dotenv>=1.0.0",
+    "loguru>=0.7.0",
+    "aiofiles>=24.0.0",
+]
+
+[project.optional-dependencies]
+# Optional search provider — skipped silently when TAVILY_API_KEY is unset.
+search = ["tavily-python>=0.5.0"]
+
+# Crawl4AI pulls playwright and a browser download. Local dev wants it; a
+# Streamlit Cloud deploy usually cannot afford it, and scraper_tool degrades
+# to search snippets when the import fails.
+scraping = ["crawl4ai>=0.4.0"]
+
+# sentence-transformers pulls torch (~2GB). Only needed when mem0 runs with
+# local embeddings; mem0_memory no-ops without it.
+memory = ["mem0ai>=0.1.0", "sentence-transformers>=3.0.0", "langchain-qdrant>=0.2.0"]
+
+# RAGAS + datasets are heavy and only used by the non-blocking evaluator node.
+evaluation = ["ragas>=0.2.0", "datasets>=3.0.0"]
+
+# Tool exposure over MCP.
+mcp = ["mcp>=1.0.0", "fastmcp>=2.0.0"]
+
+# Tracing — pick one, both are optional.
+observability = ["langsmith>=0.2.0", "langfuse>=2.0.0"]
+
+# Everything except the extras that need a compiler or a browser download.
+full = [
+    "amaris[search,mcp,observability,evaluation]",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=6.0.0",
+    "ruff>=0.8.0",
+    "pytest-mock>=3.14.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["amaris"]
+
+[tool.uv]
+default-groups = ["dev"]
+
+# ── ruff ──────────────────────────────────────────────────────────────────
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = [".venv", "logs", "*.md"]  # docs hold illustrative snippets, not real code
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC", "S", "C4", "SIM", "TC", "RUF"]
+ignore = [
+    "E501",    # line length is formatter's job, not lint's
+    "B008",    # FastAPI Depends() in defaults is the framework idiom
+    "S101",    # assert is how pytest works
+]
+
+[tool.ruff.lint.per-file-ignores]
+# subprocess use is the whole point of code_executor; it is sandboxed there
+"amaris/tools/code_executor.py" = ["S603", "S404"]
+"tests/**" = ["S105", "S106", "TC"]
+# hook scripts exist to shell out to ruff and git and to inspect bash
+# commands — subprocess is the whole job, and the args are ours
+".claude/hooks/*.py" = ["S603", "S404", "S607"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["amaris", "frontend"]
+
+# ── pytest ────────────────────────────────────────────────────────────────
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+markers = [
+    "integration: needs docker-compose services running",
+    "live_llm: makes a real provider call, skipped by default",
+]
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.coverage.run]
+source = ["amaris"]
+omit = ["*/__main__.py"]

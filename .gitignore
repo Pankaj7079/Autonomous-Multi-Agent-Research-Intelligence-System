@@ -1,0 +1,37 @@
+# secrets and local state
+.env
+.claude/settings.local.json
+.streamlit/secrets.toml
+amaris_checkpoints.db
+amaris_checkpoints.db-*
+
+# system logs — replayable per session, never committed
+logs/
+*.log
+
+# python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+*.egg-info/
+dist/
+build/
+
+# environments — uv.lock IS committed, the venv is not
+.venv/
+venv/
+
+# local vector/model caches
+.cache/
+qdrant_storage/
+
+# os / editor
+.DS_Store
+Thumbs.db
+.idea/
+
+docs

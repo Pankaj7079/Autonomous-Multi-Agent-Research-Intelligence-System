@@ -1,0 +1,53 @@
+# Local dev services only. Cloud mode runs without any of this — see ADR-008.
+#   docker compose up -d                      redis + qdrant
+#   docker compose --profile obs up -d        + langfuse tracing
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: amaris-redis
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 5
+    restart: unless-stopped
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: amaris-qdrant
+    ports: ["6333:6333"]
+    volumes: [qdrant_data:/qdrant/storage]
+    # qdrant's image has no shell, so the usual curl healthcheck fails —
+    # readiness is checked by the app's /ready probe instead
+    restart: unless-stopped
+
+  # optional — unlimited free traces, self-hosted
+  langfuse:
+    image: langfuse/langfuse:2
+    container_name: amaris-langfuse
+    profiles: ["obs"]
+    ports: ["3000:3000"]
+    environment:
+      DATABASE_URL: postgresql://langfuse:langfuse@langfuse-db:5432/langfuse
+      NEXTAUTH_SECRET: local-dev-secret
+      SALT: local-dev-salt
+      NEXTAUTH_URL: http://localhost:3000
+      TELEMETRY_ENABLED: "false"
+    depends_on: [langfuse-db]
+    restart: unless-stopped
+
+  langfuse-db:
+    image: postgres:16-alpine
+    container_name: amaris-langfuse-db
+    profiles: ["obs"]
+    environment:
+      POSTGRES_USER: langfuse
+      POSTGRES_PASSWORD: langfuse
+      POSTGRES_DB: langfuse
+    volumes: [langfuse_db:/var/lib/postgresql/data]
+    restart: unless-stopped
+
+volumes:
+  qdrant_data:
+  langfuse_db:
