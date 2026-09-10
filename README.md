@@ -51,8 +51,8 @@ extra is absent. Rationale in [ADR-009](docs/DECISIONS.md).
 | # | Phase | Delivers | Status |
 |---|---|---|---|
 | 0 | Scaffolding | docs, uv project, package layout, logging | ✅ done |
-| 1 | Foundation | settings.py, state.py, llm/router.py | ⬜ |
-| 2 | Tools | search, scraper, code executor, vector, MCP | ⬜ |
+| 1 | Foundation | settings.py, state.py, llm/router.py | ✅ done |
+| 2 | Tools | search, scraper, code executor, vector, MCP | ✅ done |
 | 3 | Memory | redis (with fallback), mem0 | ⬜ |
 | 4 | Agents | supervisor + planner/researcher/analyst/writer/critic | ⬜ |
 | 5 | Pipeline | nodes, edges, StateGraph, checkpointing | ⬜ |

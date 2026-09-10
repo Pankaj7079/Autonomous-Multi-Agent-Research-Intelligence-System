@@ -120,4 +120,15 @@ def timed(event: str, **fields: Any) -> Iterator[dict[str, Any]]:
         logger.bind(ms=round(elapsed, 1), **extra).info(f"{event}.complete")
 
 
-__all__ = ["configure_logging", "logger", "timed"]
+def configure_from_settings(force: bool = False) -> None:
+    """Same as configure_logging but reads the values from Settings."""
+    # imported here, not at module level, so logging stays usable before settings load
+    from amaris.config.settings import get_settings
+
+    s = get_settings()
+    configure_logging(
+        level=s.log_level, log_dir=s.log_dir, json_enabled=s.log_json_enabled, force=force
+    )
+
+
+__all__ = ["configure_from_settings", "configure_logging", "logger", "timed"]

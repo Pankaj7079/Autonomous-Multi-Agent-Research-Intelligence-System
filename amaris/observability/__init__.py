@@ -9,11 +9,17 @@ from amaris.observability.context import (
     get_session_id,
     new_session_id,
 )
-from amaris.observability.logging import configure_logging, logger, timed
+from amaris.observability.logging import (
+    configure_from_settings,
+    configure_logging,
+    logger,
+    timed,
+)
 
 __all__ = [
     "agent_context",
     "bind_session",
+    "configure_from_settings",
     "configure_logging",
     "get_agent",
     "get_session_id",
