@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from pydantic import BaseModel, ConfigDict, Field
+
 from amaris.agents.base_agent import BaseAgent
 from amaris.observability.logging import logger
 
@@ -36,6 +38,15 @@ Output JSON:
 Query: {query}"""
 
 
+class PlannerOutput(BaseModel):
+    """The planner's contract. Items stay raw — _normalise_tasks owns their shape."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    tasks: list[Any] = Field(default_factory=list)
+    research_strategy: str = ""
+
+
 class PlannerAgent(BaseAgent):
     """Writes research_plan and research_strategy."""
 
@@ -43,13 +54,15 @@ class PlannerAgent(BaseAgent):
     task_type = "planning"
 
     async def _run(self, state: GraphState) -> dict[str, Any]:
-        payload = await self._invoke_json(PROMPT.format(query=state["original_query"]))
-        tasks = self._normalise_tasks(payload.get("tasks", []), state["original_query"])
+        payload = await self._invoke_structured(
+            PROMPT.format(query=state["original_query"]), PlannerOutput
+        )
+        tasks = self._normalise_tasks(payload.tasks, state["original_query"])
 
         logger.bind(tasks=len(tasks)).info("planner.planned")
         return {
             "research_plan": tasks,
-            "research_strategy": str(payload.get("research_strategy", "")).strip(),
+            "research_strategy": payload.research_strategy.strip(),
         }
 
     def _normalise_tasks(self, raw: Any, query: str) -> list[dict[str, Any]]:

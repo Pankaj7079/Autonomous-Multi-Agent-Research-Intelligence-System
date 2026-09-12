@@ -44,6 +44,7 @@ dependencies = [
     # golden_set.py parses tests/golden/queries.yaml directly — pulled in transitively
     # by langchain today, but that's not a promise, so it's declared explicitly
     "pyyaml>=6.0",
+    "langchain-openai>=1.6.2",
 ]
 
 [project.optional-dependencies]

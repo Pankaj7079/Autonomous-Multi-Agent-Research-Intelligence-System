@@ -14,8 +14,9 @@ hard-coded.
 ![AMARIS demo](assets/demo.gif)
 -->
 
-> **Status: phases 0-9 complete.** Full pipeline, API, UI and layered
-> evaluation run end to end. Tier 1 hardening is next.
+> **Status: Tier 0 phases 0-9 and Tier 1 hardening complete.** Full pipeline,
+> API, UI, layered evaluation, and the safety and resilience layer all run end
+> to end.
 
 ## Agentic, not a pipeline
 
@@ -123,6 +124,23 @@ uv sync --extra evaluation
 uv run python -m amaris.evaluation.harness --golden tests/golden/queries.yaml
 ```
 
+## Safety
+
+Regex only — no model call, no extra dependency. A safety layer that needs an
+LLM fails exactly when the LLM is already failing.
+
+- **Input** is validated once at the edge: junk and high-risk injection are
+  refused, PII is masked, and the masked query is what actually runs.
+- **Output** is masked for PII that leaked in from scraped pages. It never blocks.
+- **Retrieved content is wrapped**, never blocked. Every scraped page is
+  delimited in `<untrusted_source_content>` tags with a standing instruction
+  that text inside is data to analyse, never instructions to follow — and a page
+  cannot close the wrapper early, because both tags are neutralised first.
+
+Indirect injection is the real risk in a system that fetches arbitrary URLs and
+feeds them to an LLM. Blocking scraped text would silently kill legitimate
+research, so it is contained instead.
+
 ## Deploy
 
 **Streamlit Community Cloud** — entrypoint `frontend/app.py`. Community Cloud
@@ -186,8 +204,9 @@ LLM, search and store is a test double. Tests marked `integration` need
 | 8 | Frontend | Streamlit, dual mode, custom CSS | ✅ done |
 | 9 | Tests + deploy | full suite, README, Streamlit Cloud config | ✅ done |
 
-Tier 1 hardening (4-provider fallback, structured-output resilience, startup
-validation, readiness probes, PII guardrails, injection defense) follows.
+**Tier 1 hardening — ✅ done.** 4-provider fallback chain, structured-output
+validation with a repair retry, startup config validation, readiness probes,
+PII masking + input guardrails, and prompt-injection defense.
 
 ## Tech stack
 
@@ -195,7 +214,7 @@ validation, readiness probes, PII guardrails, injection defense) follows.
 |---|---|---|
 | Orchestration | LangGraph + SqliteSaver | open source |
 | LLM (primary) | Groq openai/gpt-oss-120b / gpt-oss-20b | free, no card |
-| LLM (fallbacks) | Google Gemini 3.6 Flash (free), Anthropic Claude (paid, last resort) | mixed |
+| LLM (fallbacks) | Gemini 3.6 Flash (free), GLM-4.5-Flash via Z.ai (free), Anthropic Claude (paid, last resort) | mixed |
 | Search | DuckDuckGo (`ddgs`), Tavily optional | free / 1000 mo |
 | Scraping | Crawl4AI | open source |
 | Memory | mem0 + Qdrant | open source / 1GB cloud |
@@ -204,6 +223,7 @@ validation, readiness probes, PII guardrails, injection defense) follows.
 | API | FastAPI + WebSockets | — |
 | UI | Streamlit + custom CSS | free public URL |
 | Logs | loguru → console + JSONL | — |
+| Safety | regex PII masking, guardrails, injection wrapping | no dependency |
 
 ## Documentation
 

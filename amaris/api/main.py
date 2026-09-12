@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from amaris.api.routes import health, research
 from amaris.config.settings import get_settings
+from amaris.config.validate import log_report, validate_config
 from amaris.graph.pipeline import reset_pipeline
 from amaris.memory.redis_memory import get_job_store, reset_job_store
 from amaris.observability.logging import configure_from_settings, logger
@@ -26,6 +27,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Logging first, then warm the job store so the first request does not pay for it."""
     configure_from_settings()
     settings = get_settings()
+
+    report = validate_config()
+    log_report(report)
+    if not report.ok:
+        # starting anyway means failing four agents deep instead of here, with a worse message
+        raise RuntimeError("invalid configuration: " + "; ".join(report.errors))
+
     store = await get_job_store()
     logger.bind(
         mode=settings.deployment_mode,

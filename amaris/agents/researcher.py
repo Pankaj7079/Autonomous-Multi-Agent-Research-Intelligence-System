@@ -7,9 +7,12 @@ import re
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+from pydantic import BaseModel, ConfigDict
+
 from amaris.agents.base_agent import AgentError, BaseAgent
 from amaris.memory.mem0_memory import add_research_finding, recall_related
 from amaris.observability.logging import logger
+from amaris.safety.injection import UNTRUSTED_NOTICE, wrap_untrusted
 from amaris.tools.scraper_tool import needs_scraping, scrape_url
 from amaris.tools.search_tool import smart_search
 
@@ -20,6 +23,8 @@ SNIPPET_CHARS = 400
 MEMORY_RECALL_LIMIT = 3
 
 REACT_PROMPT = """You are a ReAct research agent. Think, act, observe, repeat.
+
+{untrusted_notice}
 
 Task: {task_description}
 Sources found so far: {found_count}
@@ -47,6 +52,16 @@ Rate overall research quality 0.0-1.0:
   0.6-0.8 good coverage of most angles
   0.8-1.0 excellent, diverse authoritative sources
 Output only a float."""
+
+
+class ReActDecision(BaseModel):
+    """One ReAct step. Defaults are the safe stop, so a thin reply ends the task quietly."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    action: str = "stop"
+    action_input: Any = None
+    sufficient: bool = False
 
 
 class ResearcherAgent(BaseAgent):
@@ -118,9 +133,9 @@ class ResearcherAgent(BaseAgent):
                 )
                 break
 
-            action = str(decision.get("action", "stop")).strip()
-            action_input = decision.get("action_input")
-            sufficient = bool(decision.get("sufficient"))
+            action = decision.action.strip()
+            action_input = decision.action_input
+            sufficient = decision.sufficient
 
             logger.bind(
                 task_id=task_id,
@@ -150,6 +165,7 @@ class ResearcherAgent(BaseAgent):
         self, description: str, found: list[dict[str, Any]], recalled: list[str], iteration: int
     ) -> dict[str, Any]:
         prompt = REACT_PROMPT.format(
+            untrusted_notice=UNTRUSTED_NOTICE,
             task_description=description,
             found_count=len(found),
             prev_summary=self._summarise(found),
@@ -157,8 +173,7 @@ class ResearcherAgent(BaseAgent):
             iteration=iteration,
             max_iterations=self.settings.max_react_iterations,
         )
-        payload = await self._invoke_json(prompt)
-        return payload if isinstance(payload, dict) else {"action": "stop", "sufficient": False}
+        return await self._invoke_structured(prompt, ReActDecision)
 
     async def _search(
         self, query: str, task_id: str, already: list[dict[str, Any]]
@@ -243,6 +258,7 @@ class ResearcherAgent(BaseAgent):
             )
 
     def _summarise(self, found: list[dict[str, Any]]) -> str:
+        """Titles come off scraped pages, so they are untrusted text like the bodies are."""
         if not found:
             return "nothing yet"
-        return "; ".join(item.get("title", "")[:80] for item in found[-5:])
+        return wrap_untrusted("; ".join(item.get("title", "")[:80] for item in found[-5:]))

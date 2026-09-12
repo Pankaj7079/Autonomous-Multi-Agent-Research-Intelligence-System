@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 from amaris.agents.base_agent import BaseAgent
 from amaris.observability.logging import logger
+from amaris.safety.injection import UNTRUSTED_NOTICE, wrap_untrusted
 from amaris.tools.code_executor import execute_python
 from amaris.tools.vector_tool import search_knowledge_base
 
@@ -18,6 +19,8 @@ MAX_SOURCES_IN_PROMPT = 12
 KB_LIMIT = 3
 
 PROMPT = """You are a senior research analyst.
+
+{untrusted_notice}
 
 1. IDENTIFY the analysis type this needs:
    statistical (numbers present) | comparative | causal | conceptual
@@ -62,6 +65,7 @@ class AnalystAgent(BaseAgent):
     async def _run(self, state: GraphState) -> dict[str, Any]:
         knowledge = await search_knowledge_base(state["original_query"], limit=KB_LIMIT)
         prompt = PROMPT.format(
+            untrusted_notice=UNTRUSTED_NOTICE,
             query=state["original_query"],
             sources=self._format_sources(state["raw_research"]),
             knowledge="; ".join(hit["text"][:200] for hit in knowledge) or "nothing stored yet",
@@ -95,8 +99,9 @@ class AnalystAgent(BaseAgent):
     def _format_sources(self, sources: list[dict[str, Any]]) -> str:
         if not sources:
             return "no sources were gathered"
-        return "\n\n".join(
+        blocks = "\n\n".join(
             f"[{index}] {item.get('title', '')} — {item.get('url', '')}\n"
             f"{item.get('content', '')[:SOURCE_CHARS]}"
             for index, item in enumerate(sources[:MAX_SOURCES_IN_PROMPT], start=1)
         )
+        return wrap_untrusted(blocks)

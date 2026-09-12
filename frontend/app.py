@@ -18,7 +18,9 @@ from amaris.api.schemas import (
     result_from_state,
 )
 from amaris.config.settings import get_settings
+from amaris.config.validate import ConfigReport, log_report, validate_config
 from amaris.observability.logging import configure_from_settings, logger
+from amaris.safety.guardrails import validate_input
 from frontend.components import agent_progress_tracker, citation_list, score_dashboard
 from frontend.styles import inject_css
 
@@ -30,10 +32,12 @@ RunOutcome = tuple[ResearchResult | None, str, str | None]
 
 
 @st.cache_resource
-def _boot() -> bool:
-    """Streamlit reruns the script constantly, so logging must be configured exactly once."""
+def _boot() -> ConfigReport:
+    """Streamlit reruns the script constantly, so this must happen exactly once."""
     configure_from_settings()
-    return True
+    report = validate_config()
+    log_report(report)
+    return report
 
 
 async def _run_local(query: str, on_event: EventSink) -> RunOutcome:
@@ -88,6 +92,16 @@ def _header(mode: str) -> None:
     )
 
 
+def _config_notice(report: ConfigReport) -> None:
+    """Errors are loud, warnings stay folded away — a demo should not open on a yellow wall."""
+    for item in report.errors:
+        st.error(item)
+    if report.warnings:
+        with st.expander(f"{len(report.warnings)} configuration warning(s)"):
+            for item in report.warnings:
+                st.warning(item)
+
+
 def _render_result(result: ResearchResult | None, session_id: str, error: str | None) -> None:
     if error:
         st.warning(f"the run reported an error: {error}")
@@ -138,10 +152,11 @@ def _execute(query: str, is_cloud: bool) -> None:
 def main() -> None:
     # set_page_config must be the first streamlit call on the page
     st.set_page_config(page_title="AMARIS", page_icon="◆", layout="wide")
-    _boot()
+    report = _boot()
     settings = get_settings()
     inject_css()
     _header(settings.deployment_mode)
+    _config_notice(report)
 
     with st.form("query"):
         query = st.text_input(
@@ -152,6 +167,11 @@ def main() -> None:
         submitted = st.form_submit_button("Research", type="primary")
 
     if submitted and query.strip():
+        guard = validate_input(query)
+        if not guard.ok:
+            st.error(guard.reason)
+            return
+        query = guard.text
         try:
             _execute(query.strip(), settings.is_cloud)
         except (httpx.HTTPError, OSError) as exc:

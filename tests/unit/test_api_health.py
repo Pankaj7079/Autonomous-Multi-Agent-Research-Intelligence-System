@@ -47,7 +47,12 @@ def test_ready_passes_with_an_llm_key_even_when_qdrant_is_down(
     _with_providers(monkeypatch, ["groq"])
     response = client.get("/ready")
     assert response.status_code == 200
-    assert response.json()["checks"] == {"llm": True, "job_store": True, "qdrant": False}
+    assert response.json()["checks"] == {
+        "config": True,
+        "llm": True,
+        "job_store": True,
+        "qdrant": False,
+    }
 
 
 def test_ready_is_503_with_no_provider_configured(
@@ -70,3 +75,16 @@ async def test_a_hanging_check_is_treated_as_unavailable(monkeypatch: pytest.Mon
         return True
 
     assert await health._guarded(hangs()) is False
+
+
+def test_ready_is_503_when_the_thresholds_are_contradictory(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A config error must fail readiness, not just the keys — /ready and the lifespan agree."""
+    _with_providers(monkeypatch, ["groq"])
+    settings = health.get_settings()
+    monkeypatch.setattr(settings, "quality_approve_threshold", 0.1)
+    monkeypatch.setattr(settings, "research_quality_threshold", 0.9)
+    response = client.get("/ready")
+    assert response.status_code == 503
+    assert response.json()["checks"]["config"] is False

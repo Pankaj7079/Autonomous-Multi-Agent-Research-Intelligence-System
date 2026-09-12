@@ -44,11 +44,12 @@ _DEFAULT_TEMPERATURE = 0.3
 _REQUEST_TIMEOUT = 60
 
 # free-tier providers first, anthropic last since it needs a paid key
-FALLBACK_ORDER = ("groq", "gemini", "anthropic")
+FALLBACK_ORDER = ("groq", "gemini", "glm", "anthropic")
 
 _KEY_FIELDS = {
     "groq": "groq_api_key",
     "gemini": "gemini_api_key",
+    "glm": "glm_api_key",
     "anthropic": "anthropic_api_key",
 }
 
@@ -66,6 +67,9 @@ _RETRYABLE_MARKERS = (
     "connection",
     "503",
     "overloaded",
+    # gpt-oss emits a native tool call from a tool-shaped name in the react prompt and groq
+    # 400s it. json mode does not actually prevent it, so hop instead of losing the step.
+    "tool_use_failed",
 )
 
 
@@ -180,6 +184,21 @@ def _build_gemini(settings: Settings, task_type: str) -> BaseChatModel:
     )
 
 
+def _build_glm(settings: Settings, task_type: str) -> BaseChatModel:
+    from langchain_openai import ChatOpenAI
+
+    # langchain-openai, not langchain-community's ChatZhipuAI — that package sunset a
+    # per-provider class on us once already (ADR-018) and langchain-zhipuai is at 0.0.1
+    return ChatOpenAI(
+        model=settings.glm_model,
+        api_key=settings.key("glm_api_key"),
+        base_url=settings.glm_base_url,
+        temperature=_temperature(task_type),
+        timeout=_REQUEST_TIMEOUT,
+        max_retries=0,
+    )
+
+
 def _build_anthropic(settings: Settings, task_type: str) -> BaseChatModel:
     from langchain_anthropic import ChatAnthropic
 
@@ -193,10 +212,15 @@ def _build_anthropic(settings: Settings, task_type: str) -> BaseChatModel:
     )
 
 
-_BUILDERS = {"groq": _build_groq, "gemini": _build_gemini, "anthropic": _build_anthropic}
+_BUILDERS = {
+    "groq": _build_groq,
+    "gemini": _build_gemini,
+    "glm": _build_glm,
+    "anthropic": _build_anthropic,
+}
 
-# gpt-oss emits a native tool call when it sees a tool-shaped name in a json schema, which
-# groq then rejects with 400. json mode forces plain json text and disables tool calling.
+# json mode asks for plain json text. it reduces but does not eliminate gpt-oss emitting a
+# native tool call, so tool_use_failed is also in _RETRYABLE_MARKERS as the real backstop.
 _JSON_MODE_BINDINGS: dict[str, dict[str, Any]] = {
     "groq": {"response_format": {"type": "json_object"}},
 }

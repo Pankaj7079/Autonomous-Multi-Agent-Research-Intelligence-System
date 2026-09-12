@@ -14,10 +14,13 @@ from amaris.llm.router import (
     invoke_with_fallback,
     is_retryable,
 )
+from amaris.llm.structured import StructuredOutputError, extract_json, invoke_structured
 from amaris.observability.context import agent_context
 from amaris.observability.logging import logger
 
 if TYPE_CHECKING:
+    from pydantic import BaseModel
+
     from amaris.graph.state import GraphState
 
 MAX_ATTEMPTS = 3
@@ -126,22 +129,25 @@ class BaseAgent(ABC):
         )
 
     def _parse_json(self, text: str) -> Any:
-        """Parse a JSON reply. Tier 1 patch 2 replaces this with validate-and-repair."""
-        cleaned = strip_code_fences(text)
+        """Parse a JSON reply with no schema attached. Prefer _invoke_structured where a model exists."""
         try:
-            return json.loads(cleaned)
-        except json.JSONDecodeError:
-            pass
-
-        # models like to wrap json in prose, so retry on the outermost braces
-        start, end = cleaned.find("{"), cleaned.rfind("}")
-        if start == -1 or end <= start:
-            raise AgentError(f"{self.name}: no JSON object in response")
-        try:
-            return json.loads(cleaned[start : end + 1])
-        except json.JSONDecodeError as exc:
-            raise AgentError(f"{self.name}: malformed JSON: {exc}") from exc
+            return json.loads(extract_json(text))
+        except (StructuredOutputError, json.JSONDecodeError) as exc:
+            raise AgentError(f"{self.name}: {exc}") from exc
 
     async def _invoke_json(self, prompt: str, task_type: str | None = None) -> Any:
         """For agents whose contract is JSON. Requests provider json mode where supported."""
         return self._parse_json(await self._invoke(prompt, task_type=task_type, json_mode=True))
+
+    async def _invoke_structured[T: BaseModel](
+        self, prompt: str, model: type[T], task_type: str | None = None
+    ) -> T:
+        """JSON validated against a schema, re-asking the model to repair its own bad output."""
+
+        async def call(text: str) -> str:
+            return await self._invoke(text, task_type=task_type, json_mode=True)
+
+        try:
+            return await invoke_structured(call, prompt, model)
+        except StructuredOutputError as exc:
+            raise AgentError(f"{self.name}: {exc}") from exc

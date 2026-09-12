@@ -266,3 +266,43 @@ async def test_chain_wait_is_zero_while_any_provider_is_free(keys, fake_provider
     # gemini is parked for an hour, groq was never parked, so there is still something to call
     assert cooldown_remaining() > 0.0
     assert chain_wait_seconds() == 0.0
+
+
+# ── patch 1: glm as the third free hop ──────────────────────────────────────
+
+
+def test_glm_sits_before_anthropic_so_the_paid_key_stays_last() -> None:
+    assert router.FALLBACK_ORDER.index("glm") < router.FALLBACK_ORDER.index("anthropic")
+
+
+def test_glm_is_skipped_when_it_has_no_key(keys) -> None:
+    keys(groq_api_key="gsk_test")
+    assert "glm" not in configured_chain()
+
+
+def test_glm_joins_the_chain_once_a_key_exists(keys) -> None:
+    keys(groq_api_key="gsk_test", glm_api_key="zai_test")
+    assert configured_chain() == ["groq", "glm"]
+
+
+def test_glm_is_built_through_the_openai_protocol(keys) -> None:
+    """z.ai is openai-compatible, so it needs the base_url override to reach the right host."""
+    settings = keys(glm_api_key="zai_test")
+    llm = router._build_glm(settings, "planning")
+    assert llm.model_name == settings.glm_model
+    assert "z.ai" in str(llm.openai_api_base)
+
+
+def test_a_groq_tool_call_400_falls_back_instead_of_failing_the_step() -> None:
+    """Found live: gpt-oss emits a tool call from the react prompt's tool-shaped names and
+    groq 400s it. json mode does not prevent it, so the chain must treat it as hoppable."""
+    error = Exception(
+        "Error code: 400 - {'error': {'message': 'Tool choice is none, but model called a "
+        "tool', 'code': 'tool_use_failed'}}"
+    )
+    assert router.is_retryable(error)
+
+
+def test_a_plain_400_is_still_not_retryable() -> None:
+    """A bad key or bad model id fails identically everywhere — hopping would just waste quota."""
+    assert not router.is_retryable(Exception("Error code: 400 - invalid model id"))

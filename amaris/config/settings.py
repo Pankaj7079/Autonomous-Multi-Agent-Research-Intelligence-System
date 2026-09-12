@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     # SecretStr so a stray repr() or log of the settings object can't leak a key
     groq_api_key: SecretStr | None = None
     gemini_api_key: SecretStr | None = None
+    glm_api_key: SecretStr | None = None
     anthropic_api_key: SecretStr | None = None
     tavily_api_key: SecretStr | None = None
 
@@ -69,6 +70,9 @@ class Settings(BaseSettings):
     groq_model_reasoning: str = "openai/gpt-oss-120b"
     groq_model_fast: str = "openai/gpt-oss-20b"
     gemini_model_fallback: str = "gemini-3.6-flash"
+    # z.ai speaks the openai protocol, so langchain-openai drives it with a base url override
+    glm_model: str = "glm-4.5-flash"
+    glm_base_url: str = "https://api.z.ai/api/paas/v4"
     # last-resort fallback only — not a free-tier provider, skipped silently if no key
     anthropic_model: str = "claude-sonnet-5"
 
@@ -99,6 +103,7 @@ class Settings(BaseSettings):
         pairs = [
             ("groq", "groq_api_key"),
             ("gemini", "gemini_api_key"),
+            ("glm", "glm_api_key"),
             ("anthropic", "anthropic_api_key"),
         ]
         return [provider for provider, field in pairs if self.key(field)]

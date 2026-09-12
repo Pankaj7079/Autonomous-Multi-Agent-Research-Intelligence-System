@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from pydantic import BaseModel, ConfigDict, Field
+
 from amaris.agents.base_agent import BaseAgent
 from amaris.graph.state import APPROVE, FIX_WRITING, NEED_MORE_RESEARCH
 from amaris.observability.logging import logger
@@ -50,6 +52,18 @@ Report:
 {report}"""
 
 
+class CriticOutput(BaseModel):
+    """Raw values only — _scores and _clamp still own the ranges."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    scores: dict[str, Any] = Field(default_factory=dict)
+    overall: Any = None
+    routing_hint: str = ""
+    feedback: str = ""
+    top_issue: str = ""
+
+
 class CriticAgent(BaseAgent):
     """Writes critic_scores, quality_score, critic_feedback, top_issue, routing_hint."""
 
@@ -63,11 +77,11 @@ class CriticAgent(BaseAgent):
             source_count=len(state["raw_research"]),
             report=state["draft_report"][:REPORT_CHARS] or "no report was produced",
         )
-        payload = await self._invoke_json(prompt)
+        payload = await self._invoke_structured(prompt, CriticOutput)
 
-        scores = self._scores(payload.get("scores"))
-        overall = self._overall(payload.get("overall"), scores)
-        hint = self._hint(payload.get("routing_hint"), scores, overall)
+        scores = self._scores(payload.scores)
+        overall = self._overall(payload.overall, scores)
+        hint = self._hint(payload.routing_hint, scores, overall)
 
         logger.bind(
             overall=overall,
@@ -79,8 +93,8 @@ class CriticAgent(BaseAgent):
         return {
             "critic_scores": scores,
             "quality_score": overall,
-            "critic_feedback": str(payload.get("feedback", "")).strip(),
-            "top_issue": str(payload.get("top_issue", "")).strip(),
+            "critic_feedback": payload.feedback.strip(),
+            "top_issue": payload.top_issue.strip(),
             "routing_hint": hint,
             # the critic counts the revision; the supervisor enforces the cap
             "revision_count": state["revision_count"] + 1,

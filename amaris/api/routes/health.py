@@ -8,6 +8,7 @@ from fastapi import APIRouter, Response, status
 
 from amaris.api.schemas import HealthStatus
 from amaris.config.settings import get_settings
+from amaris.config.validate import validate_config
 from amaris.memory.redis_memory import get_job_store
 from amaris.observability.logging import logger
 
@@ -38,18 +39,21 @@ async def ready(response: Response) -> HealthStatus:
 
     settings = get_settings()
     store = await get_job_store()
+    report = validate_config()
 
     checks = {
-        "llm": bool(settings.configured_llm_providers),
+        # one source of truth for "is this configured" — the lifespan uses the same call
+        "config": report.ok,
+        "llm": bool(report.providers),
         "job_store": await _guarded(store.ping()),
         # qdrant is advisory: vector_tool degrades to search when it is missing (ADR-009)
         "qdrant": await _guarded(vector_tool.ping()),
     }
-    required = checks["llm"] and checks["job_store"]
+    required = checks["config"] and checks["job_store"]
 
     if not required:
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
-    logger.bind(**checks, backend=store.backend).debug("api.ready")
+    logger.bind(**checks, backend=store.backend, warnings=len(report.warnings)).debug("api.ready")
     return HealthStatus(
         status="ready" if required else "not_ready", mode=settings.deployment_mode, checks=checks
     )

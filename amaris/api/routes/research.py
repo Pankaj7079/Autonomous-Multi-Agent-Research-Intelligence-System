@@ -22,6 +22,7 @@ from amaris.graph.pipeline import stream_research
 from amaris.memory.redis_memory import get_job_store
 from amaris.observability.context import new_session_id
 from amaris.observability.logging import logger
+from amaris.safety.guardrails import validate_input
 
 if TYPE_CHECKING:
     from amaris.graph.state import GraphState
@@ -104,17 +105,19 @@ def _spawn(job_id: str, query: str, session_id: str) -> None:
 @router.post("", response_model=ResearchAccepted, status_code=status.HTTP_202_ACCEPTED)
 async def start_research(request: ResearchRequest) -> ResearchAccepted:
     """Queue a run and return immediately. The pipeline takes 60-90s, so nothing blocks here."""
+    guard = validate_input(request.query)
+    if not guard.ok:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=guard.reason)
+
     job_id = uuid.uuid4().hex
     session_id = request.session_id or new_session_id()
 
     store = await get_job_store()
-    await store.create_job(job_id, request.query)
+    await store.create_job(job_id, guard.text)
     await store.update_job(job_id, session_id=session_id)
-    _spawn(job_id, request.query, session_id)
+    _spawn(job_id, guard.text, session_id)
 
-    logger.bind(job_id=job_id, session_id=session_id, query=request.query[:120]).info(
-        "api.job_queued"
-    )
+    logger.bind(job_id=job_id, session_id=session_id, query=guard.text[:120]).info("api.job_queued")
     return ResearchAccepted(job_id=job_id, session_id=session_id)
 
 

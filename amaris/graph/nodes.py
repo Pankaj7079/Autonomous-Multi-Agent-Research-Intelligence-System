@@ -20,6 +20,7 @@ from amaris.evaluation.retrieval_eval import RetrievalEvaluator
 from amaris.graph.state import FINISH, GraphState
 from amaris.memory.mem0_memory import add_session_summary
 from amaris.observability.logging import logger
+from amaris.safety.guardrails import validate_output
 
 if TYPE_CHECKING:
     from amaris.agents.base_agent import BaseAgent
@@ -82,6 +83,8 @@ async def evaluator_node(state: GraphState) -> dict[str, Any]:
     report = state["draft_report"]
     if not report and state["error"]:
         report = f"This run could not be completed: {state['error']}"
+    # scraped pages can carry personal data into the draft, so it is masked before it ships
+    report = validate_output(report).text
     state = {**state, "final_report": report}
 
     # scoring is advisory, so a failure here returns zeros rather than costing us a finished report
