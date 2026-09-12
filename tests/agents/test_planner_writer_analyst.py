@@ -11,7 +11,7 @@ from amaris.agents import analyst as analyst_module
 from amaris.agents.analyst import AnalystAgent
 from amaris.agents.planner import PlannerAgent
 from amaris.agents.writer import WriterAgent
-from tests.agents.helpers import ScriptedLLM, patch_invoke
+from tests.helpers import ScriptedLLM, patch_invoke
 
 # ── planner ───────────────────────────────────────────────────────────────
 

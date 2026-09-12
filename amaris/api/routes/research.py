@@ -15,8 +15,8 @@ from amaris.api.schemas import (
     ProgressEvent,
     ResearchAccepted,
     ResearchRequest,
-    ResearchResult,
     build_progress_event,
+    result_from_state,
 )
 from amaris.graph.pipeline import stream_research
 from amaris.memory.redis_memory import get_job_store
@@ -36,20 +36,6 @@ WS_POLL_SECONDS = 5.0
 # create_task alone is not enough — without a strong reference the loop can collect a
 # running job mid-flight, and a 90 second pipeline is a very collectable task
 _running: set[asyncio.Task[None]] = set()
-
-
-def _result_from(state: GraphState) -> ResearchResult:
-    # critic and evaluator both emit a "faithfulness", so the eval scores get prefixed
-    scores = {
-        **state["critic_scores"],
-        **{f"eval_{k}": v for k, v in state["evaluation_scores"].items()},
-    }
-    return ResearchResult(
-        report=state["final_report"] or state["draft_report"],
-        citations=state["citations"],
-        scores=scores,
-        agent_path=state["agent_path"],
-    )
 
 
 async def _publish(store: JobStore, job_id: str, event: ProgressEvent) -> None:
@@ -76,7 +62,7 @@ async def _run_job(job_id: str, query: str, session_id: str) -> None:
             pct = event.progress_pct
             await _publish(store, job_id, event)
 
-        result = _result_from(final) if final else None
+        result = result_from_state(final) if final else None
         # an errored run that still produced a report is a degraded success, not a failure
         failed = bool(final and final["error"] and not (result and result.report))
         await store.update_job(

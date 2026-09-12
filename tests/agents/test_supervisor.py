@@ -6,7 +6,7 @@ import pytest
 
 from amaris.agents.supervisor import SupervisorAgent
 from amaris.graph.state import FINISH, NEED_MORE_RESEARCH, GraphState
-from tests.agents.helpers import ScriptedLLM, patch_invoke
+from tests.helpers import ScriptedLLM, patch_invoke
 
 
 async def route(

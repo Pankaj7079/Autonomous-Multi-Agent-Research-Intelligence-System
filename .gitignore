@@ -38,3 +38,9 @@ Thumbs.db
 .idea/
 
 docs
+
+.claude
+CLAUDE
+
+# agent instructions — kept local, not published
+CLAUDE.md

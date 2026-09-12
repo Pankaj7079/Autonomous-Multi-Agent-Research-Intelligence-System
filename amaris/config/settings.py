@@ -42,6 +42,9 @@ class Settings(BaseSettings):
     langfuse_secret_key: SecretStr | None = None
     langfuse_host: str = "http://localhost:3000"
 
+    # the streamlit frontend calls this in local mode; cloud mode ignores it entirely
+    api_base_url: str = "http://localhost:8000"
+
     redis_url: str = "redis://localhost:6379"
     qdrant_host: str = "localhost"
     qdrant_port: int = 6333

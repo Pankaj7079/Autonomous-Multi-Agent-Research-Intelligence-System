@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, Field
+
+if TYPE_CHECKING:
+    from amaris.graph.state import GraphState
 
 JobState = Literal["queued", "running", "done", "failed"]
 
@@ -115,4 +118,19 @@ def build_progress_event(
         status=status,
         message=_detail(agent, delta),
         progress_pct=progress_for(agent, current_pct),
+    )
+
+
+def result_from_state(state: GraphState) -> ResearchResult:
+    """Final state to the shape both the API and the in-process frontend return."""
+    # critic and evaluator both emit a "faithfulness", so the eval scores get prefixed
+    scores = {
+        **state["critic_scores"],
+        **{f"eval_{k}": v for k, v in state["evaluation_scores"].items()},
+    }
+    return ResearchResult(
+        report=state["final_report"] or state["draft_report"],
+        citations=state["citations"],
+        scores=scores,
+        agent_path=state["agent_path"],
     )

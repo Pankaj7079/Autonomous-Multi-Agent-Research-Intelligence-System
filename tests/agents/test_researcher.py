@@ -9,7 +9,7 @@ import pytest
 
 from amaris.agents import researcher as researcher_module
 from amaris.agents.researcher import ResearcherAgent
-from tests.agents.helpers import ScriptedLLM, patch_invoke
+from tests.helpers import ScriptedLLM, patch_invoke
 
 
 def decision(action: str, action_input: Any = "langgraph agents", sufficient: bool = False) -> str:

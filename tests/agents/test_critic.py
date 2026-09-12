@@ -8,7 +8,7 @@ import pytest
 
 from amaris.agents.critic import CriticAgent
 from amaris.graph.state import APPROVE, FIX_WRITING, NEED_MORE_RESEARCH
-from tests.agents.helpers import ScriptedLLM, patch_invoke
+from tests.helpers import ScriptedLLM, patch_invoke
 
 
 def verdict(

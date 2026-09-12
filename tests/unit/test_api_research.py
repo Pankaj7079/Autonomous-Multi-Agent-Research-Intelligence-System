@@ -9,17 +9,20 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
+from amaris.api import schemas
 from amaris.api.main import create_app
 from amaris.api.routes import research
-from amaris.graph.state import GraphState, new_state
+from amaris.graph.state import GraphState
 from amaris.memory import redis_memory
 
 TERMINAL = ("done", "failed")
 
 
-def _finished_state(report: str = "# Report\nbody") -> GraphState:
-    state = new_state("what is langgraph")
-    state["final_report"] = report
+@pytest.fixture
+def finished_state(sample_state: GraphState) -> GraphState:
+    """A run that reached the evaluator, built on the shared sample_state fixture."""
+    state = sample_state
+    state["final_report"] = "# Report\nbody"
     state["citations"] = [{"url": "https://x.com/1", "title": "X"}]
     state["critic_scores"] = {"faithfulness": 0.9, "coherence": 0.8}
     state["evaluation_scores"] = {"faithfulness": 0.7, "overall": 0.75}
@@ -55,9 +58,9 @@ def _await_job(client: TestClient, job_id: str, timeout: float = 5.0) -> dict[st
 
 
 def test_post_returns_immediately_and_the_run_completes(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, finished_state: GraphState
 ) -> None:
-    final = _finished_state()
+    final = finished_state
     steps = [("planner", {"research_plan": [1, 2, 3]}), ("writer", {}), ("critic", {})]
     monkeypatch.setattr(research, "stream_research", _fake_stream(steps, final))
 
@@ -74,9 +77,9 @@ def test_post_returns_immediately_and_the_run_completes(
 
 
 def test_a_supplied_session_id_is_echoed_back(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, finished_state: GraphState
 ) -> None:
-    monkeypatch.setattr(research, "stream_research", _fake_stream([], _finished_state()))
+    monkeypatch.setattr(research, "stream_research", _fake_stream([], finished_state))
     body = client.post(
         "/research", json={"query": "what is langgraph", "session_id": "abc123"}
     ).json()
@@ -92,10 +95,10 @@ def test_short_query_is_rejected_before_a_job_exists(client: TestClient) -> None
 
 
 def test_a_raising_pipeline_marks_the_job_failed(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, sample_state: GraphState
 ) -> None:
     async def explodes(query: str, session_id: str | None = None) -> AsyncIterator[tuple]:
-        yield "planner", {}, new_state(query)
+        yield "planner", {}, sample_state
         raise RuntimeError("groq fell over")
 
     monkeypatch.setattr(research, "stream_research", explodes)
@@ -107,9 +110,9 @@ def test_a_raising_pipeline_marks_the_job_failed(
 
 
 def test_a_run_that_errored_but_still_wrote_a_report_is_a_degraded_success(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, finished_state: GraphState
 ) -> None:
-    final = _finished_state()
+    final = finished_state
     final["error"] = "critic failed: rate limited"
     monkeypatch.setattr(research, "stream_research", _fake_stream([("writer", {})], final))
     job_id = client.post("/research", json={"query": "what is langgraph"}).json()["job_id"]
@@ -120,10 +123,10 @@ def test_a_run_that_errored_but_still_wrote_a_report_is_a_degraded_success(
 
 
 def test_websocket_streams_to_a_terminal_event(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, finished_state: GraphState
 ) -> None:
     steps = [("planner", {}), ("researcher", {}), ("writer", {}), ("critic", {})]
-    monkeypatch.setattr(research, "stream_research", _fake_stream(steps, _finished_state()))
+    monkeypatch.setattr(research, "stream_research", _fake_stream(steps, finished_state))
     job_id = client.post("/research", json={"query": "what is langgraph"}).json()["job_id"]
 
     seen: list[dict[str, Any]] = []
@@ -149,16 +152,20 @@ def test_websocket_rejects_an_unknown_job(client: TestClient) -> None:
         socket.receive_json()
 
 
-def test_eval_scores_are_prefixed_so_they_cannot_shadow_the_critic() -> None:
+def test_eval_scores_are_prefixed_so_they_cannot_shadow_the_critic(
+    finished_state: GraphState,
+) -> None:
     """Both the critic and the evaluator emit a 'faithfulness' — a plain merge loses one."""
-    result = research._result_from(_finished_state())
+    result = schemas.result_from_state(finished_state)
     assert result.scores["faithfulness"] == 0.9
     assert result.scores["eval_faithfulness"] == 0.7
     assert result.scores["eval_overall"] == 0.75
 
 
-def test_report_falls_back_to_the_draft_when_the_evaluator_never_ran() -> None:
-    state = _finished_state()
+def test_report_falls_back_to_the_draft_when_the_evaluator_never_ran(
+    finished_state: GraphState,
+) -> None:
+    state = finished_state
     state["final_report"] = ""
     state["draft_report"] = "# Draft"
-    assert research._result_from(state).report == "# Draft"
+    assert schemas.result_from_state(state).report == "# Draft"
