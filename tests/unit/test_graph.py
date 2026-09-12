@@ -114,3 +114,54 @@ async def test_evaluator_explains_a_failed_run_instead_of_returning_nothing() ->
 
     assert "could not be completed" in report
     assert "rate limited" in report
+
+
+async def test_a_nan_metric_is_omitted_rather_than_stored_as_zero(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Found live: faithfulness NaNs while its siblings score. Storing 0.0 would publish
+    'the report is unfaithful' when the truth is 'the judge never answered'."""
+    from amaris.evaluation.base import EvalResult, zero_result
+    from amaris.graph import nodes
+
+    class FakeRetrieval:
+        async def evaluate(self, state, reference=None):
+            return [
+                EvalResult(
+                    layer="retrieval",
+                    metric="context_precision",
+                    score=1.0,
+                    passed=True,
+                    detail="2 sources scored against the query",
+                )
+            ]
+
+    class FakeReport:
+        async def evaluate(self, state, reference=None):
+            return [
+                zero_result("report", "faithfulness", "judge returned NaN — likely rate limited"),
+                EvalResult(
+                    layer="report",
+                    metric="answer_relevancy",
+                    score=0.85,
+                    passed=True,
+                    detail="ok",
+                ),
+            ]
+
+    monkeypatch.setattr(nodes, "RetrievalEvaluator", FakeRetrieval)
+    monkeypatch.setattr(nodes, "ReportEvaluator", FakeReport)
+
+    async def no_memory(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(nodes, "add_session_summary", no_memory)
+
+    state = new_state("q")
+    state["draft_report"] = "# Report"
+    result = await nodes.evaluator_node(state)
+
+    scores = result["evaluation_scores"]
+    assert "faithfulness" not in scores, "an unscored metric must be absent, not zero"
+    assert scores["context_precision"] == 1.0
+    assert scores["answer_relevancy"] == 0.85

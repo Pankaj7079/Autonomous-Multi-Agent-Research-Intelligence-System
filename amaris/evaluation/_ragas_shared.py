@@ -21,8 +21,8 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
 # every context costs the judge another llm call, which is what exhausts groq's per-minute limit
-MAX_CONTEXTS = 8
-CONTEXT_CHAR_LIMIT = 1200
+MAX_CONTEXTS = 4
+CONTEXT_CHAR_LIMIT = 800
 
 # ragas asks the judge for 3 question variants; groq returns 1 generation and ragas then crashes
 RELEVANCY_STRICTNESS = 1
@@ -91,9 +91,14 @@ def judge() -> Any | None:
         with quiet_deprecations():
             from ragas.llms import LangchainLLMWrapper
 
-            from amaris.llm.router import get_llm
+            from amaris.llm.router import configured_chain, get_fallback_llm, get_llm
 
-            return LangchainLLMWrapper(get_llm("evaluation"))
+            # the evaluator runs last, after the pipeline has spent the primary's rate window,
+            # so scoring must not go to the primary or it NaNs on a rate limit every run
+            preferred = get_settings().eval_provider.strip().lower()
+            if preferred in configured_chain():
+                return LangchainLLMWrapper(get_llm("evaluation", provider=preferred))
+            return LangchainLLMWrapper(get_fallback_llm("evaluation") or get_llm("evaluation"))
     except Exception as exc:
         _unavailable_reason = f"{type(exc).__name__}: {exc}"[:200]
         logger.bind(reason=_unavailable_reason).warning("ragas.unavailable")
@@ -133,6 +138,9 @@ def is_available() -> bool:
 # it should fail in a few seconds, not retry for two minutes.
 _RAGAS_MAX_RETRIES = 1
 _RAGAS_MAX_WAIT_SECONDS = 15
+# ragas defaults to 16 parallel judge calls, which both times out and 429s a slow free-tier
+# provider. the evaluator is not latency critical, so it goes narrow instead of wide.
+_RAGAS_MAX_WORKERS = 2
 
 
 async def run_metrics(
@@ -162,7 +170,10 @@ async def run_metrics(
 
     timeout = get_settings().ragas_timeout_seconds
     run_config = RunConfig(
-        timeout=int(timeout), max_retries=_RAGAS_MAX_RETRIES, max_wait=_RAGAS_MAX_WAIT_SECONDS
+        timeout=int(timeout),
+        max_retries=_RAGAS_MAX_RETRIES,
+        max_wait=_RAGAS_MAX_WAIT_SECONDS,
+        max_workers=_RAGAS_MAX_WORKERS,
     )
 
     def _blocking() -> dict[str, float]:

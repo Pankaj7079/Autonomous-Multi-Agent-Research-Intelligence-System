@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 import uuid
 from typing import TYPE_CHECKING, Any
 
@@ -55,11 +56,12 @@ async def _run_job(job_id: str, query: str, session_id: str) -> None:
     """Drive the pipeline and mirror every node transition into the job store."""
     store = await get_job_store()
     pct = 0
+    started = time.perf_counter()
     final: GraphState | None = None
     try:
         async for node, delta, state in stream_research(query, session_id=session_id):
             final = state
-            event = build_progress_event(node, delta, pct)
+            event = build_progress_event(node, delta, pct, elapsed_s=time.perf_counter() - started)
             pct = event.progress_pct
             await _publish(store, job_id, event)
 
@@ -82,6 +84,7 @@ async def _run_job(job_id: str, query: str, session_id: str) -> None:
                 status="failed" if failed else "done",
                 message="run finished",
                 progress_pct=DONE_PROGRESS,
+                elapsed_s=round(time.perf_counter() - started, 2),
             ),
         )
         logger.bind(job_id=job_id, session_id=session_id, pct=DONE_PROGRESS).info("api.job_done")
@@ -183,7 +186,9 @@ async def stream_progress(websocket: WebSocket, job_id: str) -> None:
         logger.bind(job_id=job_id).debug("api.ws_disconnected")
     finally:
         pump.cancel()
-        with contextlib.suppress(Exception):
+        # CancelledError derives from BaseException, so suppress(Exception) let it escape
+        # into the ASGI app and print a traceback on every clean socket close
+        with contextlib.suppress(asyncio.CancelledError, Exception):
             await pump
         with contextlib.suppress(Exception):
             await websocket.close()

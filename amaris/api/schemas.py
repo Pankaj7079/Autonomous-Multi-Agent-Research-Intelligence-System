@@ -51,6 +51,18 @@ class ResearchAccepted(BaseModel):
     status: JobState = "queued"
 
 
+class RunTrace(BaseModel):
+    """Why the run went the way it did. Without this the UI is a box that returns prose."""
+
+    decisions: list[dict[str, Any]] = Field(default_factory=list)
+    react_stats: dict[str, Any] = Field(default_factory=dict)
+    research_quality: float = 0.0
+    revision_count: int = 0
+    source_count: int = 0
+    critic_feedback: str = ""
+    top_issue: str = ""
+
+
 class ResearchResult(BaseModel):
     """The finished artefact, only present once status is done."""
 
@@ -58,6 +70,7 @@ class ResearchResult(BaseModel):
     citations: list[dict[str, Any]] = Field(default_factory=list)
     scores: dict[str, float] = Field(default_factory=dict)
     agent_path: list[str] = Field(default_factory=list)
+    trace: RunTrace | None = None
 
 
 class JobStatus(BaseModel):
@@ -80,6 +93,9 @@ class ProgressEvent(BaseModel):
     status: JobState
     message: str
     progress_pct: int
+    # seconds since the run started, set by the producer — a ui cannot derive this from ts,
+    # which is second-resolution and says nothing about when the run itself began
+    elapsed_s: float = 0.0
     ts: str = Field(default_factory=lambda: datetime.now(UTC).isoformat(timespec="seconds"))
 
 
@@ -110,7 +126,11 @@ def _detail(agent: str, delta: dict[str, Any]) -> str:
 
 
 def build_progress_event(
-    agent: str, delta: dict[str, Any], current_pct: int, status: JobState = "running"
+    agent: str,
+    delta: dict[str, Any],
+    current_pct: int,
+    status: JobState = "running",
+    elapsed_s: float = 0.0,
 ) -> ProgressEvent:
     """Build the event a node transition emits. Same shape for WebSocket and in-process."""
     return ProgressEvent(
@@ -118,6 +138,7 @@ def build_progress_event(
         status=status,
         message=_detail(agent, delta),
         progress_pct=progress_for(agent, current_pct),
+        elapsed_s=round(elapsed_s, 2),
     )
 
 
@@ -133,4 +154,13 @@ def result_from_state(state: GraphState) -> ResearchResult:
         citations=state["citations"],
         scores=scores,
         agent_path=state["agent_path"],
+        trace=RunTrace(
+            decisions=state["decision_log"],
+            react_stats=state["react_stats"],
+            research_quality=state["research_quality"],
+            revision_count=state["revision_count"],
+            source_count=len({s.get("url") for s in state["raw_research"] if s.get("url")}),
+            critic_feedback=state["critic_feedback"],
+            top_issue=state["top_issue"],
+        ),
     )

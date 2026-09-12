@@ -72,8 +72,11 @@ uv run uvicorn amaris.api.main:app      # api on :8000
 uv run streamlit run frontend/app.py    # ui on :8501
 ```
 
-Only `GROQ_API_KEY` is really required; Gemini is the free fallback and
-Anthropic is an optional last resort.
+Only `GROQ_API_KEY` is really required. Gemini and GLM are free fallbacks and
+Anthropic is an optional paid last resort. `PRIMARY_PROVIDER` chooses which one
+leads the chain — Groq by default, because it measured ~1.8s against GLM's
+~16.9s on the same prompt; switch to `glm` when Groq's rate window is the
+bottleneck and you can accept slower runs.
 
 uv only — never pip. `pyproject.toml` + `uv.lock` are the source of truth.
 Heavy dependencies are opt-in extras (`--extra scraping`, `--extra memory`,
@@ -123,6 +126,22 @@ it needs no judge, it keeps working when the judge is rate limited.
 uv sync --extra evaluation
 uv run python -m amaris.evaluation.harness --golden tests/golden/queries.yaml
 ```
+
+## Nothing is a black box
+
+The UI does not just return prose. Under every report it shows the evidence for
+how the run went:
+
+- **Routing decisions** — every supervisor call: what it chose, what the
+  documented rule table expected, and a **diverged** flag when the LLM
+  overruled the rule. A run that never diverges is a chain; the interesting
+  ones are the runs that do.
+- **ReAct loop** — per research task, iterations used and whether the
+  researcher self-stopped or hit its cap. Hitting the cap is not a failure, but
+  a run where nothing self-stops means the cap is doing the deciding.
+- **Critic feedback** — what the critic actually wrote, not only its score.
+- **Evaluation layers** — with unscored metrics named as unscored. A judge that
+  was rate limited reports "not scored", never a confident 0.00.
 
 ## Safety
 

@@ -90,7 +90,11 @@ async def evaluator_node(state: GraphState) -> dict[str, Any]:
     # scoring is advisory, so a failure here returns zeros rather than costing us a finished report
     retrieval_results = await RetrievalEvaluator().evaluate(state)
     report_results = await ReportEvaluator().evaluate(state)
-    scores = {r.metric: r.score for r in (*retrieval_results, *report_results)}
+    # a NaN from a rate-limited judge is omitted, not stored as 0.0 — "not scored" and
+    # "scored zero" mean opposite things and the ui cannot tell them apart downstream
+    scores = {
+        r.metric: r.score for r in (*retrieval_results, *report_results) if "NaN" not in r.detail
+    }
     scores["overall"] = round(sum(scores.values()) / len(scores), 4) if scores else 0.0
 
     await add_session_summary(state["original_query"], report, scores)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, ClassVar
 
@@ -12,6 +13,7 @@ from amaris.llm.router import (
     ProvidersCoolingDown,
     chain_wait_seconds,
     invoke_with_fallback,
+    is_rate_limited,
     is_retryable,
 )
 from amaris.llm.structured import StructuredOutputError, extract_json, invoke_structured
@@ -27,13 +29,21 @@ MAX_ATTEMPTS = 3
 BACKOFF_BASE_SECONDS = 0.5
 # floor so a chain a hair from expiring cannot spin the retry loop on near-zero waits
 MIN_RETRY_SLEEP_SECONDS = 0.25
+# what to wait after a rate limit when no provider is currently parked — a per-minute
+# window needs real time to clear, and the retry budget exists precisely to spend it
+RATE_LIMIT_RETRY_SECONDS = 20.0
 
 
-def _retry_delay(attempt: int) -> float:
-    """How long before the next attempt — only a fully rate-limited chain is worth a long wait."""
+def _retry_delay(attempt: int, rate_limited: bool = False) -> float:
+    """How long before the next attempt — only a rate-limited chain is worth a long wait."""
     blocked = chain_wait_seconds()
     if blocked > 0.0:
         return max(blocked, MIN_RETRY_SLEEP_SECONDS)
+    if rate_limited and attempt >= 1:
+        # the first rate-limit retry stays prompt, because a free provider usually means the
+        # failure was one provider's problem. a second one means the chain only looked free —
+        # a cooldown had just expired — so stop hammering and spend the budget it exists for.
+        return RATE_LIMIT_RETRY_SECONDS
     # a free provider means the failure was transient, so retry soon and don't read its hint
     return BACKOFF_BASE_SECONDS * 2**attempt
 
@@ -79,8 +89,13 @@ class BaseAgent(ABC):
     ) -> str:
         """LLM text with retries that respect the provider's stated wait. Raises AgentError if spent."""
         last_error: Exception | None = None
+        rate_limited = False
         attempts = 0
+        # both, because each alone has a hole: counting only sleep missed three 90s timeouts
+        # that burned 274s, and counting only wall clock lets a parked chain spin, since
+        # ProvidersCoolingDown never spends an attempt and mocked sleep advances no time
         waited = 0.0
+        started = time.monotonic()
         budget = self.settings.llm_retry_budget_seconds
 
         while attempts < MAX_ATTEMPTS:
@@ -106,18 +121,23 @@ class BaseAgent(ABC):
                 if not is_retryable(exc):
                     raise
                 last_error = exc
-                logger.bind(agent=self.name, attempt=attempts, error=str(exc)[:150]).warning(
-                    "agent.retry"
-                )
+                rate_limited = is_rate_limited(exc)
+                logger.bind(
+                    agent=self.name,
+                    attempt=attempts,
+                    rate_limited=rate_limited,
+                    error=str(exc)[:150],
+                ).warning("agent.retry")
 
             if attempts >= MAX_ATTEMPTS:
                 break
-            delay = _retry_delay(max(attempts - 1, 0))
-            if waited + delay > budget:
-                # a window longer than the budget can't be waited out, so let the node write a partial report
-                logger.bind(agent=self.name, delay=round(delay, 1), budget=budget).warning(
-                    "agent.retry_budget_spent"
-                )
+            delay = _retry_delay(max(attempts - 1, 0), rate_limited=rate_limited)
+            spent = max(waited, time.monotonic() - started)
+            if spent + delay > budget:
+                # the budget bounds the whole attempt, so let the node write a partial report
+                logger.bind(
+                    agent=self.name, delay=round(delay, 1), spent=round(spent, 1), budget=budget
+                ).warning("agent.retry_budget_spent")
                 break
             logger.bind(agent=self.name, seconds=round(delay, 2)).info("agent.retry_wait")
             await asyncio.sleep(delay)
@@ -125,7 +145,8 @@ class BaseAgent(ABC):
 
         raise AgentError(
             f"{self.name}: no usable response after {attempts} attempts "
-            f"({waited:.0f}s of {budget:.0f}s retry budget used): {last_error}"
+            f"({max(waited, time.monotonic() - started):.0f}s of {budget:.0f}s retry budget used): "
+            f"{last_error}"
         )
 
     def _parse_json(self, text: str) -> Any:

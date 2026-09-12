@@ -306,3 +306,28 @@ def test_a_groq_tool_call_400_falls_back_instead_of_failing_the_step() -> None:
 def test_a_plain_400_is_still_not_retryable() -> None:
     """A bad key or bad model id fails identically everywhere — hopping would just waste quota."""
     assert not router.is_retryable(Exception("Error code: 400 - invalid model id"))
+
+
+def test_a_rate_limit_with_no_stated_delay_still_parks() -> None:
+    """Found live: glm 429s with code 1302 and no retry hint. Unparked, the agent burned all
+    three attempts in 2s of a 75s budget and the writer failed against a 60s window."""
+    router.reset_cooldowns()
+    parked = router._park(
+        "glm",
+        Exception("Error code: 429 - {'error': {'code': '1302', 'message': 'Rate limit reached'}}"),
+    )
+    assert parked == router._UNHINTED_RATE_LIMIT_COOLDOWN
+    assert router.cooldown_remaining() > 0
+
+
+def test_a_connection_blip_still_does_not_park_a_healthy_provider() -> None:
+    router.reset_cooldowns()
+    assert router._park("groq", Exception("Connection reset by peer")) is None
+    assert router.cooldown_remaining() == 0.0
+
+
+def test_a_stated_delay_still_wins_over_the_default() -> None:
+    router.reset_cooldowns()
+    parked = router._park("groq", Exception("rate limit reached, try again in 1m12.5s"))
+    assert parked is not None
+    assert parked > router._UNHINTED_RATE_LIMIT_COOLDOWN

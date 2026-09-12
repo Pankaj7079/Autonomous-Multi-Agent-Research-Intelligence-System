@@ -20,6 +20,8 @@ if TYPE_CHECKING:
     from amaris.graph.state import GraphState
 
 SNIPPET_CHARS = 400
+# above the default research floor so the run still progresses, but never 'confident'
+UNASSESSED_QUALITY_CEILING = 0.7
 MEMORY_RECALL_LIMIT = 3
 
 REACT_PROMPT = """You are a ReAct research agent. Think, act, observe, repeat.
@@ -35,7 +37,7 @@ Iteration {iteration} of {max_iterations}
 Output JSON exactly:
 {{
   "thought": "what I have, what's missing, what angle to try next",
-  "action": "web_search" | "scrape_webpage" | "stop",
+  "action": "search" | "fetch" | "stop",
   "action_input": "query or URL, null if stopping",
   "reasoning": "why this action now",
   "sufficient": false
@@ -43,7 +45,10 @@ Output JSON exactly:
 
 Set sufficient=true and action="stop" when you have 5+ relevant recent sources
 covering the main angles. If results are thin, reformulate and search a
-different angle instead of stopping early."""
+different angle instead of stopping early.
+
+CRITICAL: you have no tools and no browser access. Do not call any tool. Emit
+only the JSON object above — a separate system executes the action for you."""
 
 ASSESS_PROMPT = """You gathered {n} sources across {t} tasks.
 Rate overall research quality 0.0-1.0:
@@ -150,9 +155,9 @@ class ResearcherAgent(BaseAgent):
                 self_terminated = sufficient
                 break
 
-            if action == "web_search":
+            if action == "search":
                 found.extend(await self._search(str(action_input), task_id, found))
-            elif action == "scrape_webpage":
+            elif action == "fetch":
                 found.extend(await self._scrape(str(action_input), task_id))
             else:
                 logger.bind(task_id=task_id, action=action).warning("researcher.unknown_action")
@@ -245,8 +250,10 @@ class ResearcherAgent(BaseAgent):
         except AgentError as exc:
             logger.bind(error=str(exc)[:150]).warning("researcher.assess_failed")
 
-        # routing depends on this, so fall back to a count-based estimate rather than 0.0
-        return min(1.0, round(sources / 8, 2))
+        # routing depends on this, so fall back to a count-based estimate rather than 0.0.
+        # capped well below 1.0: 62 sources scraped is not evidence of perfect research, and
+        # letting an unassessed run claim 1.0 told the supervisor to stop looking at it
+        return min(UNASSESSED_QUALITY_CEILING, round(sources / 8, 2))
 
     async def _remember(self, query: str, sources: list[dict[str, Any]]) -> None:
         """Store the top findings so a future run starts ahead. No-ops without the memory extra."""

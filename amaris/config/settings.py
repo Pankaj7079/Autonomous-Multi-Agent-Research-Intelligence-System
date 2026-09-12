@@ -27,6 +27,12 @@ class Settings(BaseSettings):
     # local = docker redis + qdrant + fastapi, cloud = streamlit in-process
     deployment_mode: DeploymentMode = "local"
 
+    # which provider leads the fallback chain; the rest keep their documented order
+    primary_provider: str = "groq"
+    # the judge needs to be fast AND hold quota the pipeline did not just spend. gemini
+    # bills per day and evaluation is only a few calls, so it suits this and groq does not.
+    eval_provider: str = "gemini"
+
     # SecretStr so a stray repr() or log of the settings object can't leak a key
     groq_api_key: SecretStr | None = None
     gemini_api_key: SecretStr | None = None

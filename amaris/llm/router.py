@@ -42,6 +42,11 @@ _TASK_TEMPERATURE: dict[str, float] = {
 
 _DEFAULT_TEMPERATURE = 0.3
 _REQUEST_TIMEOUT = 60
+# glm measured ~17s on a short prompt, so judge-sized prompts blow the shared 60s budget.
+# agent work gets a shorter ceiling: a 180s hang mid-run looks identical to a crash, and
+# there is nothing useful to wait for when the reply is that late.
+_GLM_REQUEST_TIMEOUT = 90
+_GLM_EVAL_REQUEST_TIMEOUT = 180
 
 # free-tier providers first, anthropic last since it needs a paid key
 FALLBACK_ORDER = ("groq", "gemini", "glm", "anthropic")
@@ -92,6 +97,19 @@ _FIELD_DELAY = re.compile(r"retry[-_ ]?(?:delay|after)\D{0,15}?(\d+(?:\.\d+)?)",
 
 # a per-day quota will not clear inside a run, unlike a per-minute one
 _DAILY_QUOTA_MARKERS = ("perday", "per day", "requests per day")
+# errors that mean "you are over a limit" rather than "the network hiccuped"
+_RATE_LIMIT_MARKERS = (
+    "429",
+    "rate limit",
+    "rate_limit",
+    "too many requests",
+    "quota",
+    "resource_exhausted",
+    "resource exhausted",
+)
+# not every provider states a delay — glm 429s with code 1302 and no hint at all, and
+# treating that as unparked burned all three attempts in 2s of a 75s budget
+_UNHINTED_RATE_LIMIT_COOLDOWN = 30.0
 _DAILY_COOLDOWN_SECONDS = 3600.0
 # sleeping the exact hint can land a hair early and 429 again
 _COOLDOWN_PAD_SECONDS = 1.0
@@ -111,13 +129,18 @@ def retry_after_seconds(exc: BaseException) -> float | None:
 
 def _park(provider: str, exc: BaseException) -> float | None:
     """Stop asking a rate-limited provider until it said to come back. Returns seconds parked."""
-    if any(marker in str(exc).lower() for marker in _DAILY_QUOTA_MARKERS):
+    text = str(exc).lower()
+    if any(marker in text for marker in _DAILY_QUOTA_MARKERS):
         seconds = _DAILY_COOLDOWN_SECONDS
     else:
         hinted = retry_after_seconds(exc)
-        if hinted is None:
+        if hinted is not None:
+            seconds = hinted + _COOLDOWN_PAD_SECONDS
+        elif any(marker in text for marker in _RATE_LIMIT_MARKERS):
+            # it said we are over a limit but not for how long, so assume a per-minute window
+            seconds = _UNHINTED_RATE_LIMIT_COOLDOWN
+        else:
             return None  # a connection blip is not a quota, don't sideline a healthy provider
-        seconds = hinted + _COOLDOWN_PAD_SECONDS
     _cooldown_until[provider] = time.monotonic() + seconds
     return seconds
 
@@ -140,6 +163,12 @@ def chain_wait_seconds() -> float:
     if not chain or _available(chain):
         return 0.0
     return max(0.0, min(_cooldown_until[name] for name in chain) - time.monotonic())
+
+
+def provider_status() -> dict[str, float]:
+    """Configured provider -> seconds until it is usable. 0.0 means ready right now."""
+    now = time.monotonic()
+    return {name: max(0.0, _cooldown_until.get(name, 0.0) - now) for name in configured_chain()}
 
 
 def reset_cooldowns() -> None:
@@ -194,7 +223,7 @@ def _build_glm(settings: Settings, task_type: str) -> BaseChatModel:
         api_key=settings.key("glm_api_key"),
         base_url=settings.glm_base_url,
         temperature=_temperature(task_type),
-        timeout=_REQUEST_TIMEOUT,
+        timeout=(_GLM_EVAL_REQUEST_TIMEOUT if task_type == "evaluation" else _GLM_REQUEST_TIMEOUT),
         max_retries=0,
     )
 
@@ -223,13 +252,21 @@ _BUILDERS = {
 # native tool call, so tool_use_failed is also in _RETRYABLE_MARKERS as the real backstop.
 _JSON_MODE_BINDINGS: dict[str, dict[str, Any]] = {
     "groq": {"response_format": {"type": "json_object"}},
+    # z.ai speaks the openai protocol and accepts json_object — verified against the live api
+    "glm": {"response_format": {"type": "json_object"}},
 }
 
 
 def configured_chain() -> list[str]:
     """Providers with a key present, in fallback order. Empty means nothing is configured."""
     settings = get_settings()
-    return [name for name in FALLBACK_ORDER if settings.key(_KEY_FIELDS[name])]
+    chain = [name for name in FALLBACK_ORDER if settings.key(_KEY_FIELDS[name])]
+    # PRIMARY_PROVIDER only promotes; the rest keep their documented order behind it
+    lead = settings.primary_provider.strip().lower()
+    if lead in chain and chain[0] != lead:
+        chain.remove(lead)
+        chain.insert(0, lead)
+    return chain
 
 
 @lru_cache(maxsize=32)
@@ -259,6 +296,12 @@ def get_fallback_llm(task_type: str = "reasoning") -> BaseChatModel | None:
     """Last provider in the chain, or None when only one is configured."""
     chain = configured_chain()
     return _cached_llm(chain[-1], task_type) if len(chain) > 1 else None
+
+
+def is_rate_limited(exc: BaseException) -> bool:
+    """True when a provider refused because we are over a limit, not because of a network blip."""
+    text = f"{type(exc).__name__} {exc}".lower()
+    return any(marker in text for marker in _RATE_LIMIT_MARKERS)
 
 
 def is_retryable(exc: BaseException) -> bool:
@@ -304,6 +347,9 @@ async def invoke_with_fallback(
                 provider=provider,
                 to=usable[position + 1],
                 reason=type(exc).__name__,
+                # the class name alone hides why a provider was dropped, and only the last
+                # provider in the chain ever reaches llm.failed where the text is logged
+                error=str(exc)[:200],
                 parked_for=parked,
                 task=task_type,
             ).warning("llm.fallback")

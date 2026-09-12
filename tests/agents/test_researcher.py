@@ -62,7 +62,7 @@ async def test_loop_stops_when_the_agent_says_sufficient(
     llm = patch_invoke(
         monkeypatch,
         agent,
-        ScriptedLLM(decision("web_search"), decision("stop", None, sufficient=True), "0.8"),
+        ScriptedLLM(decision("search"), decision("stop", None, sufficient=True), "0.8"),
     )
 
     await agent.run(state)
@@ -76,9 +76,7 @@ async def test_loop_never_exceeds_the_iteration_cap(monkeypatch: pytest.MonkeyPa
     agent = ResearcherAgent()
     cap = agent.settings.max_react_iterations
     # one more search decision than the cap allows, so only the cap can stop it
-    llm = patch_invoke(
-        monkeypatch, agent, ScriptedLLM(*[decision("web_search")] * (cap + 1), "0.7")
-    )
+    llm = patch_invoke(monkeypatch, agent, ScriptedLLM(*[decision("search")] * (cap + 1), "0.7"))
 
     await agent.run(state)
     react_calls = [p for p in llm.prompts if "ReAct research agent" in p]
@@ -95,7 +93,7 @@ async def test_sources_are_deduped_by_url(monkeypatch: pytest.MonkeyPatch, state
     patch_invoke(
         monkeypatch,
         agent,
-        ScriptedLLM(decision("web_search"), decision("stop", None, True), "0.8"),
+        ScriptedLLM(decision("search"), decision("stop", None, True), "0.8"),
     )
 
     update = await agent.run(state)
@@ -120,9 +118,7 @@ async def test_quality_is_parsed_from_a_messy_float(monkeypatch: pytest.MonkeyPa
     patch_invoke(
         monkeypatch,
         agent,
-        ScriptedLLM(
-            decision("web_search"), decision("stop", None, True), "I rate this 0.85 overall"
-        ),
+        ScriptedLLM(decision("search"), decision("stop", None, True), "I rate this 0.85 overall"),
     )
 
     assert (await agent.run(state))["research_quality"] == 0.85
@@ -159,7 +155,7 @@ async def test_one_failing_task_does_not_lose_the_others(
         return (
             decision("stop", None, True)
             if "Sources found so far: 1" in prompt
-            else decision("web_search")
+            else decision("search")
         )
 
     monkeypatch.setattr(ResearcherAgent, "_invoke", selective)
@@ -205,7 +201,7 @@ async def test_react_stats_records_self_termination(monkeypatch: pytest.MonkeyPa
     state["research_plan"] = [{"task_id": "t1", "description": "d"}]
     agent = ResearcherAgent()
     patch_invoke(
-        monkeypatch, agent, ScriptedLLM(decision("web_search"), decision("stop", None, True), "0.8")
+        monkeypatch, agent, ScriptedLLM(decision("search"), decision("stop", None, True), "0.8")
     )
 
     update = await agent.run(state)
@@ -216,7 +212,7 @@ async def test_react_stats_records_hitting_the_cap(monkeypatch: pytest.MonkeyPat
     state["research_plan"] = [{"task_id": "t1", "description": "d"}]
     agent = ResearcherAgent()
     cap = agent.settings.max_react_iterations
-    patch_invoke(monkeypatch, agent, ScriptedLLM(*[decision("web_search")] * (cap + 1), "0.7"))
+    patch_invoke(monkeypatch, agent, ScriptedLLM(*[decision("search")] * (cap + 1), "0.7"))
 
     update = await agent.run(state)
     stats = update["react_stats"]["t1"]

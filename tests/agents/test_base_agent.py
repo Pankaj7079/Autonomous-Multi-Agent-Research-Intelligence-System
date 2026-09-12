@@ -264,3 +264,55 @@ def _record(into: list[float]):
 async def _no_sleep(seconds: float) -> None:
     """Backoff is real in production but would just make the suite slow."""
     return None
+
+
+async def test_a_second_consecutive_rate_limit_stops_hammering(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Found live: the critic burned 3 attempts in 2s of a 75s budget. A provider whose
+    cooldown had just expired made the chain look free, so every retry took the 0.5s path
+    into a limit that had not actually cleared."""
+    from amaris.agents import base_agent
+
+    monkeypatch.setattr(base_agent, "chain_wait_seconds", lambda: 0.0)
+    limit = Exception("Error code: 429 - rate limit reached for requests")
+
+    first = base_agent._retry_delay(0, rate_limited=base_agent.is_rate_limited(limit))
+    second = base_agent._retry_delay(1, rate_limited=base_agent.is_rate_limited(limit))
+
+    assert first < 1.0, "the first retry stays prompt — one provider's problem is not the chain's"
+    assert second == base_agent.RATE_LIMIT_RETRY_SECONDS
+
+
+async def test_a_transient_failure_never_takes_the_rate_limit_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from amaris.agents import base_agent
+
+    monkeypatch.setattr(base_agent, "chain_wait_seconds", lambda: 0.0)
+    assert base_agent.is_rate_limited(Exception("Connection reset by peer")) is False
+    assert base_agent._retry_delay(1, rate_limited=False) < base_agent.RATE_LIMIT_RETRY_SECONDS
+
+
+async def test_slow_calls_count_against_the_budget_even_with_no_waiting(
+    monkeypatch: pytest.MonkeyPatch, probe: Probe
+) -> None:
+    """Found live: the analyst spent 274s on three 90s timeouts and reported '2s of 75s used',
+    because the budget counted only the gaps between calls, never the calls themselves."""
+    clock = {"now": 0.0}
+
+    async def slow_timeout(
+        prompt: Any, task_type: str = "reasoning", **kwargs: Any
+    ) -> FakeResponse:
+        clock["now"] += 90.0  # the provider sat on the request until its ceiling
+        raise RuntimeError("Request timed out.")
+
+    monkeypatch.setattr(base_module, "invoke_with_fallback", slow_timeout)
+    monkeypatch.setattr(base_module, "chain_wait_seconds", lambda: 0.0)
+    monkeypatch.setattr(base_module.time, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(base_module.asyncio, "sleep", _record([]))
+
+    with pytest.raises(AgentError, match="retry budget"):
+        await probe._invoke("prompt")
+    # one 90s call already exceeds the 75s budget, so it must not attempt two more
+    assert clock["now"] == 90.0
