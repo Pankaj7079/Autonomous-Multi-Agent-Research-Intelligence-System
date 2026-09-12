@@ -8,7 +8,16 @@ import pytest
 
 from amaris.config.settings import Settings
 from amaris.llm import router
-from amaris.llm.router import LLMConfigError, configured_chain, get_llm, invoke_with_fallback
+from amaris.llm.router import (
+    LLMConfigError,
+    ProvidersCoolingDown,
+    chain_wait_seconds,
+    configured_chain,
+    cooldown_remaining,
+    get_llm,
+    invoke_with_fallback,
+    retry_after_seconds,
+)
 
 
 class FakeMessage:
@@ -154,3 +163,106 @@ async def test_invoke_with_no_keys_explains_how_to_fix_it(keys) -> None:
     keys()
     with pytest.raises(LLMConfigError, match=r"console\.groq\.com"):
         await invoke_with_fallback("hello")
+
+
+# ── rate-limit cooldown ───────────────────────────────────────────────────
+# found live: the writer's big call exhausts groq's tpm window, and every later
+# call in the run then burned a request on an already-exhausted gemini
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        ("Rate limit reached. Please try again in 58.64s.", 58.64),
+        ("Limit 6000, used 5994. Please try again in 1m12.5s.", 72.5),
+        ("RESOURCE_EXHAUSTED ... retryDelay: '34s'", 34.0),
+        ("429 Too Many Requests, retry-after: 60", 60.0),
+        # gemini says "retry in", groq says "try again in" — both have to parse
+        ("429 You exceeded your quota. Please retry in 34.9s.", 34.9),
+        ("RESOURCE_EXHAUSTED retry_delay { seconds: 27 }", 27.0),
+        ("Error code: 429 - rate limit reached", None),
+        ("connection reset by peer", None),
+    ],
+)
+def test_retry_after_is_read_from_the_provider_message(
+    message: str, expected: float | None
+) -> None:
+    """Backoff guessed 0.5s/1s/2s against a 60s window — the provider already says the number."""
+    assert retry_after_seconds(RuntimeError(message)) == expected
+
+
+async def test_a_parked_provider_is_skipped_on_the_next_call(keys, fake_providers) -> None:
+    """Asking a provider again inside the window it just named wastes a request and a round trip."""
+    keys(groq_api_key="k", gemini_api_key="g")
+    llms = fake_providers(
+        groq=FakeLLM("groq", RuntimeError("429 rate limit, please try again in 58.6s")),
+        gemini=FakeLLM("gemini"),
+    )
+
+    assert (await invoke_with_fallback("one")).text == "reply from gemini"
+    assert (await invoke_with_fallback("two")).text == "reply from gemini"
+    assert llms["groq"].calls == 1
+
+
+async def test_a_transient_error_does_not_park_a_provider(keys, fake_providers) -> None:
+    """No stated delay means no quota claim, so a healthy primary must not be sidelined."""
+    keys(groq_api_key="k", gemini_api_key="g")
+    llms = fake_providers(
+        groq=FakeLLM("groq", ConnectionError("connection reset")), gemini=FakeLLM("gemini")
+    )
+
+    await invoke_with_fallback("one")
+    await invoke_with_fallback("two")
+    assert llms["groq"].calls == 2
+    assert cooldown_remaining() == 0.0
+
+
+async def test_a_per_day_quota_parks_the_provider_for_the_whole_run(keys, fake_providers) -> None:
+    """Gemini's free tier is 20 requests/day; its 34s retryDelay is useless once that is spent."""
+    keys(groq_api_key="k", gemini_api_key="g")
+    fake_providers(
+        groq=FakeLLM("groq", RuntimeError("429 try again in 5.0s")),
+        gemini=FakeLLM(
+            "gemini", RuntimeError("RESOURCE_EXHAUSTED GenerateRequestsPerDay limit: 20")
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="RESOURCE_EXHAUSTED"):
+        await invoke_with_fallback("one")
+    # groq frees up in 5s, gemini not for an hour — the wait reported is the sooner one
+    assert 5.0 < cooldown_remaining() <= 6.0
+
+
+async def test_every_provider_parked_raises_with_the_wait(keys, fake_providers) -> None:
+    """The agent needs the number to sleep on, not a generic failure it can only guess at."""
+    keys(groq_api_key="k", gemini_api_key="g")
+    fake_providers(
+        groq=FakeLLM("groq", RuntimeError("429 try again in 30s")),
+        gemini=FakeLLM("gemini", RuntimeError("429 try again in 45s")),
+    )
+
+    with pytest.raises(RuntimeError):
+        await invoke_with_fallback("one")
+    with pytest.raises(ProvidersCoolingDown) as caught:
+        await invoke_with_fallback("two")
+    assert 29.0 < caught.value.seconds <= 31.0
+
+
+def test_cooling_down_counts_as_retryable() -> None:
+    """Otherwise the agent raises straight through instead of waiting out the window."""
+    assert router.is_retryable(ProvidersCoolingDown(30.0)) is True
+
+
+async def test_chain_wait_is_zero_while_any_provider_is_free(keys, fake_providers) -> None:
+    """The primary blipping must not inherit the fallback's hour-long quota wait."""
+    keys(groq_api_key="k", gemini_api_key="g")
+    fake_providers(
+        groq=FakeLLM("groq", ConnectionError("connection reset")),
+        gemini=FakeLLM("gemini", RuntimeError("429 GenerateRequestsPerDay limit: 20")),
+    )
+
+    with pytest.raises(RuntimeError):
+        await invoke_with_fallback("one")
+    # gemini is parked for an hour, groq was never parked, so there is still something to call
+    assert cooldown_remaining() > 0.0
+    assert chain_wait_seconds() == 0.0

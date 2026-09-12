@@ -13,8 +13,16 @@ NEED_MORE_RESEARCH = "need_more_research"
 FIX_WRITING = "fix_writing"
 APPROVE = "approve"
 
+# named individually so trajectory_eval.py can re-derive supervisor routing without
+# hard-coding agent name strings a second time
+PLANNER = "planner"
+RESEARCHER = "researcher"
+ANALYST = "analyst"
+WRITER = "writer"
+CRITIC = "critic"
+
 # every value state["next_agent"] is allowed to take
-AGENTS = ("planner", "researcher", "analyst", "writer", "critic")
+AGENTS = (PLANNER, RESEARCHER, ANALYST, WRITER, CRITIC)
 FINISH = "FINISH"
 
 
@@ -52,6 +60,12 @@ class GraphState(TypedDict):
     # supervisor writes next_agent, the conditional edge routes on it
     next_agent: str
     agent_path: list[str]
+    # one entry per supervisor call — the trajectory evaluator's only input (ADR-017)
+    decision_log: list[dict[str, Any]]
+
+    # researcher — per task_id: {iterations_used, self_terminated}. Powers react_discipline;
+    # loguru sees every ReAct step, but only this survives to be scored after the run ends
+    react_stats: dict[str, dict[str, Any]]
 
     # evaluator
     final_report: str
@@ -83,6 +97,8 @@ def new_state(query: str, session_id: str | None = None) -> GraphState:
         revision_count=0,
         next_agent="",
         agent_path=[],
+        decision_log=[],
+        react_stats={},
         final_report="",
         evaluation_scores={},
         error=None,

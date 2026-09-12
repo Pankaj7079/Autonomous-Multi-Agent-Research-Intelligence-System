@@ -55,9 +55,9 @@ extra is absent. Rationale in [ADR-009](docs/DECISIONS.md).
 | 2 | Tools | search, scraper, code executor, vector, MCP | ✅ done |
 | 3 | Memory | redis (with fallback), mem0 | ✅ done |
 | 4 | Agents | supervisor + planner/researcher/analyst/writer/critic | ✅ done |
-| 5 | Pipeline | nodes, edges, StateGraph, checkpointing | ⬜ |
-| 6 | Evaluation | RAGAS scoring, non-blocking | ⬜ |
-| 7 | API | FastAPI + WebSocket progress stream | ⬜ |
+| 5 | Pipeline | nodes, edges, StateGraph, checkpointing | ✅ done |
+| 6 | Evaluation | RAGAS scoring, non-blocking | ✅ done |
+| 7 | API | FastAPI + WebSocket progress stream | ✅ done |
 | 8 | Frontend | Streamlit, dual mode, custom CSS | ⬜ |
 | 9 | Tests + deploy | full suite, README, Streamlit Cloud config | ⬜ |
 
@@ -92,7 +92,7 @@ exact agent path the system chose. Details in
 | Scraping | Crawl4AI | open source |
 | Memory | mem0 + Qdrant | open source / 1GB cloud |
 | Ops state | Redis, with in-memory fallback | open source |
-| Evaluation | RAGAS on Groq | open source |
+| Evaluation | RAGAS (Groq judge, Gemini embeddings) | open source |
 | API | FastAPI + WebSockets | — |
 | UI | Streamlit + custom CSS | free public URL |
 | Logs | loguru → console + JSONL | — |

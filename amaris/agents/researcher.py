@@ -67,9 +67,18 @@ class ResearcherAgent(BaseAgent):
             return_exceptions=True,
         )
 
-        merged = self._merge(state["raw_research"], outcomes)
+        sources_outcomes = [
+            outcome if isinstance(outcome, BaseException) else outcome[0] for outcome in outcomes
+        ]
+        merged = self._merge(state["raw_research"], sources_outcomes)
         quality = await self._self_assess(len(merged), len(tasks))
         await self._remember(state["original_query"], merged)
+
+        # react_discipline (Layer 3) needs this: did the loop decide it was done, or run out of road
+        new_stats = dict(state["react_stats"])
+        for task, outcome in zip(tasks, outcomes, strict=False):
+            if not isinstance(outcome, BaseException):
+                new_stats[str(task.get("task_id", "t?"))] = outcome[1]
 
         logger.bind(
             sources=len(merged),
@@ -79,20 +88,31 @@ class ResearcherAgent(BaseAgent):
             recalled=len(recalled),
         ).info("researcher.done")
 
-        return {"raw_research": merged, "research_quality": quality}
+        # consume the hint: leaving it set makes the supervisor route here forever
+        return {
+            "raw_research": merged,
+            "research_quality": quality,
+            "routing_hint": "",
+            "react_stats": new_stats,
+        }
 
     async def _research_task(
         self, task: dict[str, Any], recalled: list[str]
-    ) -> list[dict[str, Any]]:
-        """One ReAct loop. Returns whatever it gathered, even if a step failed."""
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        """One ReAct loop. Returns what it gathered plus how it ended, even if a step failed."""
         task_id = str(task.get("task_id", "t?"))
         description = str(task.get("description", ""))
         found: list[dict[str, Any]] = []
+        iterations_used = 0
+        self_terminated = False
 
         for iteration in range(1, self.settings.max_react_iterations + 1):
+            iterations_used = iteration
             try:
                 decision = await self._decide(description, found, recalled, iteration)
-            except AgentError as exc:
+            except Exception as exc:
+                # provider errors surface here too, not just AgentError — one bad step must
+                # not lose the sources this task already gathered
                 logger.bind(task_id=task_id, iteration=iteration, error=str(exc)[:150]).warning(
                     "researcher.react_failed"
                 )
@@ -111,6 +131,8 @@ class ResearcherAgent(BaseAgent):
             ).debug("researcher.react_step")
 
             if sufficient or action == "stop" or not action_input:
+                # only sufficient=true is a real decision — "stop" alone can mean a blank reply
+                self_terminated = sufficient
                 break
 
             if action == "web_search":
@@ -121,7 +143,8 @@ class ResearcherAgent(BaseAgent):
                 logger.bind(task_id=task_id, action=action).warning("researcher.unknown_action")
                 break
 
-        return found
+        stats = {"iterations_used": iterations_used, "self_terminated": self_terminated}
+        return found, stats
 
     async def _decide(
         self, description: str, found: list[dict[str, Any]], recalled: list[str], iteration: int

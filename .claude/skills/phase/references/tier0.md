@@ -87,14 +87,30 @@ Build `amaris/graph/nodes.py`, `edges.py`, `pipeline.py`.
 Add a `__main__` block. Log `run.start` / `run.complete` with the full agent path.
 Verify: `uv run python -m amaris.graph.pipeline --query "What is LangGraph?"`
 
-## Phase 6 — Evaluation
+## Phase 6 — Layered Evaluation (ADR-017, replaces the original RAGAS-only plan)
 
-Build `amaris/evaluation/ragas_eval.py` plus the evaluator node.
+RAGAS evaluates retrieve-then-generate; most of what determines AMARIS's output
+quality happens in supervisor routing and the ReAct/revision loops, which RAGAS
+never sees. Three layers instead of one metric:
 
-`evaluate_report(query, answer, contexts)` → faithfulness, answer_relevancy,
-context_precision, overall. Configure RAGAS to use Groq, never OpenAI. Behind the
-`evaluation` extra. Must never raise — log a warning and return zeros on failure.
-The evaluator node also stores the session to mem0.
+- **Layer 1** `retrieval_eval.py` — RAGAS `context_precision` (+ `context_recall`
+  when a golden query gives a `reference_answer`), scoped to sources vs the
+  query only, never the report. Configure RAGAS to use Groq, never OpenAI.
+- **Layer 2** `report_eval.py` — RAGAS `Faithfulness` + `ResponseRelevancy` on
+  the final report vs its sources and vs the query. (Not DeepEval: its
+  `ToolCorrectnessMetric` assumes one correct tool per intent, which fights
+  the ReAct loop's deliberately adaptive tool choice — see ADR-017.)
+- **Layer 3** `trajectory_eval.py` — custom, zero LLM calls, scores the
+  *path*: `routing_accuracy`, `research_convergence`, `loop_efficiency`,
+  `termination_quality`, `react_discipline`. Needs `decision_log` (supervisor)
+  and `react_stats` (researcher) added to `GraphState`. Runs from the harness
+  only, never inline on a real session.
+
+Plus `base.py` (`EvalResult`/`EvalReport`/`Evaluator` protocol), `golden_set.py`
+(loads `tests/golden/queries.yaml`), and `harness.py` (`run_evaluation`,
+`compare_reports`, a CLI). Every evaluator degrades to a zero `EvalResult`
+instead of raising. Layers 1+2 run inline in the evaluator node (cheap); Layer
+3 runs only from `amaris.evaluation.harness`, off the request path.
 
 ## Phase 7 — API
 

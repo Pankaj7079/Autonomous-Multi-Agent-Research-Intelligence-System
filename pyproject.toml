@@ -41,6 +41,9 @@ dependencies = [
     "loguru>=0.7.0",
     "aiofiles>=24.0.0",
     "langchain-anthropic>=1.7.2",
+    # golden_set.py parses tests/golden/queries.yaml directly — pulled in transitively
+    # by langchain today, but that's not a promise, so it's declared explicitly
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]

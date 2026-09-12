@@ -149,7 +149,9 @@ async def test_one_failing_task_does_not_lose_the_others(
     ]
     agent = ResearcherAgent()
 
-    async def selective(self: Any, prompt: str, task_type: str | None = None) -> str:
+    async def selective(
+        self: Any, prompt: str, task_type: str | None = None, json_mode: bool = False
+    ) -> str:
         if "bad" in prompt:
             raise RuntimeError("this task blew up")
         if "Rate overall research quality" in prompt:
@@ -185,3 +187,51 @@ async def test_missing_plan_falls_back_to_the_raw_query(
 
     await agent.run(state)
     assert state["original_query"] in llm.prompts[0]
+
+
+async def test_researcher_consumes_the_routing_hint(
+    monkeypatch: pytest.MonkeyPatch, researched_state
+) -> None:
+    """need_more_research must be cleared once acted on, or routing sticks here forever."""
+    researched_state["routing_hint"] = "need_more_research"
+    agent = ResearcherAgent()
+    patch_invoke(monkeypatch, agent, ScriptedLLM(decision("stop", None, True), "0.8"))
+
+    assert (await agent.run(researched_state))["routing_hint"] == ""
+
+
+async def test_react_stats_records_self_termination(monkeypatch: pytest.MonkeyPatch, state) -> None:
+    """react_discipline (Layer 3) needs to tell a clean stop from hitting the iteration cap."""
+    state["research_plan"] = [{"task_id": "t1", "description": "d"}]
+    agent = ResearcherAgent()
+    patch_invoke(
+        monkeypatch, agent, ScriptedLLM(decision("web_search"), decision("stop", None, True), "0.8")
+    )
+
+    update = await agent.run(state)
+    assert update["react_stats"]["t1"] == {"iterations_used": 2, "self_terminated": True}
+
+
+async def test_react_stats_records_hitting_the_cap(monkeypatch: pytest.MonkeyPatch, state) -> None:
+    state["research_plan"] = [{"task_id": "t1", "description": "d"}]
+    agent = ResearcherAgent()
+    cap = agent.settings.max_react_iterations
+    patch_invoke(monkeypatch, agent, ScriptedLLM(*[decision("web_search")] * (cap + 1), "0.7"))
+
+    update = await agent.run(state)
+    stats = update["react_stats"]["t1"]
+    assert stats["iterations_used"] == cap
+    assert stats["self_terminated"] is False
+
+
+async def test_react_stats_merge_across_tasks_and_visits(
+    monkeypatch: pytest.MonkeyPatch, researched_state
+) -> None:
+    """A re-visited task_id overwrites its own stats; other tasks' stats must survive."""
+    researched_state["react_stats"] = {"t0": {"iterations_used": 4, "self_terminated": False}}
+    agent = ResearcherAgent()
+    patch_invoke(monkeypatch, agent, ScriptedLLM(decision("stop", None, True), "0.9"))
+
+    update = await agent.run(researched_state)
+    assert "t0" in update["react_stats"]
+    assert update["react_stats"]["t1"]["self_terminated"] is True

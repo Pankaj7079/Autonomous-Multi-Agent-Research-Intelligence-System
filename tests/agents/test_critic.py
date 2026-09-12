@@ -68,12 +68,23 @@ async def test_revision_count_increments(monkeypatch: pytest.MonkeyPatch, drafte
     assert update["revision_count"] == 2
 
 
+async def test_passing_score_overrides_a_fix_writing_hint(
+    monkeypatch: pytest.MonkeyPatch, drafted_state
+) -> None:
+    """Found live: overall 0.92 plus fix_writing looped the writer 10 times until the step cap."""
+    update = await critique(monkeypatch, drafted_state, verdict(overall=0.92, hint=FIX_WRITING))
+    assert update["routing_hint"] == APPROVE
+
+
 async def test_unknown_hint_is_derived_from_the_scores(
     monkeypatch: pytest.MonkeyPatch, drafted_state
 ) -> None:
     """An unrecognised hint would strand the supervisor, so it must be replaced, not passed on."""
+    # overall must be below the approve floor, or the contradiction check wins first
     update = await critique(
-        monkeypatch, drafted_state, verdict(faithfulness=0.2, hint="send_it_back_please")
+        monkeypatch,
+        drafted_state,
+        verdict(faithfulness=0.2, overall=0.4, hint="send_it_back_please"),
     )
     assert update["routing_hint"] == NEED_MORE_RESEARCH
 
@@ -81,7 +92,9 @@ async def test_unknown_hint_is_derived_from_the_scores(
 async def test_unknown_hint_with_good_faithfulness_becomes_fix_writing(
     monkeypatch: pytest.MonkeyPatch, drafted_state
 ) -> None:
-    update = await critique(monkeypatch, drafted_state, verdict(faithfulness=0.9, hint="???"))
+    update = await critique(
+        monkeypatch, drafted_state, verdict(faithfulness=0.9, overall=0.5, hint="???")
+    )
     assert update["routing_hint"] == FIX_WRITING
 
 

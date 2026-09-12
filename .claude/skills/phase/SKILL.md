@@ -32,12 +32,25 @@ nothing more:
 | 3 Memory | docs/MEMORY.md — the store boundaries are the spec |
 | 4 Agents | docs/AGENTS.md — **use those system prompts verbatim** |
 | 5 Pipeline | docs/ARCHITECTURE.md (the one conditional edge) |
-| 6 Evaluation | docs/MEMORY.md (evaluator also writes to mem0) |
+| 6 Evaluation | docs/DECISIONS.md ADR-017 (the layer split), docs/MEMORY.md (evaluator also writes to mem0) |
 | 7 API | docs/DESIGN.md (routes, progress weighting) |
 | 8 Frontend | docs/DESIGN.md (tokens, component contracts) |
 | 9 Tests | docs/RULES.md (test behaviour, not implementation) |
 
-## 3. Build it
+## 3. Push back before building, if warranted
+
+The brief is a plan written before any code existed — it can be wrong now.
+Before implementing, check whether it names a library/model that's since been
+renamed or retired, duplicates something already built, or would take a
+simpler 90%-there path. Say so and propose the alternative before writing
+code, per CLAUDE.md's Working agreement. Silent compliance with a stale brief
+is not the goal; a correct Phase 6 is.
+
+If the brief turns out to need more than ~3 new files or a change to working
+code from an earlier phase, describe the plan in a few lines and get a nod
+before writing it.
+
+## 4. Build it
 
 Non-negotiables, every phase:
 
@@ -52,7 +65,7 @@ Non-negotiables, every phase:
 Write the tests as part of the phase, not after it. Every new module gets a
 matching test file under `tests/unit/` or `tests/agents/`.
 
-## 4. Verify before claiming done
+## 5. Verify before claiming done
 
 Run the phase's own verify command from the brief, then the standard gate:
 
@@ -63,12 +76,15 @@ uv run ruff check . && uv run ruff format --check . && uv run pytest
 If a phase verify command needs API keys or Docker and they are not available,
 say so plainly and report what you could not check — do not quietly skip it.
 
-## 5. Close out
+## 6. Close out
 
 - Flip the phase row in the README build-phase table from ⬜ to ✅
 - If the phase made a decision worth keeping, add an ADR to docs/DECISIONS.md
-  (next free number — 009 and 010 are taken; Tier 1 patches start at 011)
-- Report what was built, what was verified, and what was not
+  (check the highest `## ADR-0NN` already there — Tier 1 patches reserve 011-016
+  even before they're built, so Tier 0 phases 6-9 start at 017)
+- Report what was built, what was verified, and what was **not** handled —
+  scope deliberately left out, quota/API limits hit, anything that will need
+  revisiting. Done-with-hidden-debt is worse than done-with-stated-caveats.
 - **Do not commit.** Pankaj commits and pushes to GitHub himself — leave the
   work in the tree and say it is ready
 - Stop and ask before starting the next phase

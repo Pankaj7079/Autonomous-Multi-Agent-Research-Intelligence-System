@@ -1,0 +1,116 @@
+# AMARIS golden set — run by amaris.evaluation.harness against the full live pipeline.
+# 14 queries, 5 categories. An eval set where everything passes measures nothing, so five of
+# these (r1, r2, a1, a2, a3) are deliberately hard: recent/fast-moving facts or genuinely
+# unresolvable questions, where a mediocre score is the CORRECT outcome, not a bug.
+
+- id: f1
+  query: "What is the Model Context Protocol (MCP)?"
+  category: factual
+  expected_min_sources: 4
+  expected_agents_involved: [planner, researcher, analyst, writer, critic]
+  should_require_revision: false
+  notes: "well-documented topic, should converge fast with high research_quality"
+
+- id: f2
+  query: "What is LangGraph and who built it?"
+  category: factual
+  expected_min_sources: 4
+  expected_agents_involved: [planner, researcher, analyst, writer, critic]
+  should_require_revision: false
+  notes: "single clear answer, good baseline for routing_accuracy"
+
+- id: f3
+  query: "What is Retrieval-Augmented Generation (RAG)?"
+  category: factual
+  expected_min_sources: 4
+  expected_agents_involved: [planner, researcher, analyst, writer, critic]
+  should_require_revision: false
+  notes: "core concept for this project, easy to fact-check the report against"
+
+- id: c1
+  query: "Compare LangGraph and CrewAI for building multi-agent systems"
+  category: comparative
+  expected_min_sources: 6
+  expected_agents_involved: [planner, researcher, analyst, writer, critic]
+  should_require_revision: false
+  notes: "needs balanced sourcing on both sides — watch for one-sided research in raw_research"
+
+- id: c2
+  query: "Compare Groq and OpenAI for LLM inference speed and cost"
+  category: comparative
+  expected_min_sources: 5
+  expected_agents_involved: [planner, researcher, analyst, writer, critic]
+  should_require_revision: false
+  notes: "numeric claims should show up in analyzed_data if the analyst runs code"
+
+- id: c3
+  query: "Compare REST APIs and GraphQL for a research backend"
+  category: comparative
+  expected_min_sources: 5
+  expected_agents_involved: [planner, researcher, analyst, writer, critic]
+  should_require_revision: false
+  notes: "well-trodden comparison, low difficulty control for the comparative category"
+
+- id: m1
+  query: "What company created the transformer architecture, and what other major AI products has that company shipped since?"
+  category: multi_hop
+  expected_min_sources: 5
+  expected_agents_involved: [planner, researcher, analyst, writer, critic]
+  should_require_revision: false
+  notes: "requires chaining two facts across separate research tasks"
+
+- id: m2
+  query: "Which vector database does AMARIS use, and why was it chosen over alternatives?"
+  category: multi_hop
+  expected_min_sources: 4
+  expected_agents_involved: [planner, researcher, analyst, writer, critic]
+  should_require_revision: false
+  notes: "self-referential stress test — sources may be thin since this is this project's own ADR, not public web content"
+
+- id: m3
+  query: "What is the relationship between LangChain, LangGraph, and LangSmith?"
+  category: multi_hop
+  expected_min_sources: 5
+  expected_agents_involved: [planner, researcher, analyst, writer, critic]
+  should_require_revision: false
+  notes: "three entities to connect correctly, tests whether the writer keeps them distinct"
+
+- id: r1
+  query: "What AI models has Anthropic released most recently?"
+  category: recent_events
+  expected_min_sources: 4
+  expected_agents_involved: [planner, researcher, analyst, writer, critic]
+  should_require_revision: false
+  notes: "deliberately hard — depends on live search finding events past training data; expect lower research_quality and treat that as correct, not a failure"
+
+- id: r2
+  query: "What is the latest stable version of the Python ragas evaluation library?"
+  category: recent_events
+  expected_min_sources: 3
+  expected_agents_involved: [planner, researcher, analyst, writer, critic]
+  should_require_revision: false
+  notes: "deliberately hard — a fast-moving package version; tests whether the researcher actually searches rather than recalling a stale trained-in number"
+
+- id: a1
+  query: "Is Python better than JavaScript?"
+  category: ambiguous
+  expected_min_sources: 4
+  expected_agents_involved: [planner, researcher, analyst, writer, critic]
+  should_require_revision: true
+  notes: "deliberately hard — no factual answer exists; tests whether the critic pushes back on an overconfident one-sided report instead of approving it"
+
+- id: a2
+  query: "What's the best way to build AI agents?"
+  category: ambiguous
+  expected_min_sources: 4
+  expected_agents_involved: [planner, researcher, analyst, writer, critic]
+  should_require_revision: true
+  notes: "deliberately hard — vague scope could balloon into an unfocused plan; watch planner task quality and loop_efficiency"
+
+- id: a3
+  query: "Tell me about AI"
+  category: ambiguous
+  expected_min_sources: 3
+  expected_agents_involved: [planner, researcher, analyst, writer, critic]
+  should_require_revision: false
+  notes: "deliberately hard — almost no scope at all; tests whether the planner narrows it into concrete tasks or produces a shallow plan"

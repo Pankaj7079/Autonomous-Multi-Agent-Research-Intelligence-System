@@ -64,6 +64,20 @@ def _client() -> Any | None:
         return None
 
 
+async def ping() -> bool:
+    """True when Qdrant answers. Used by the /ready probe, never by the agents."""
+    client = _client()
+    if client is None:
+        return False
+    try:
+        await client.get_collections()
+        return True
+    except Exception:
+        return False
+    finally:
+        await client.close()
+
+
 async def ensure_collection() -> bool:
     """Create the collection if missing. False when Qdrant isn't reachable."""
     client = _client()

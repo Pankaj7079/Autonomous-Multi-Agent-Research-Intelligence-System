@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any
@@ -72,6 +73,76 @@ class LLMConfigError(RuntimeError):
     """No usable provider key. Raised loudly — a silent no-LLM run is worse."""
 
 
+class ProvidersCoolingDown(RuntimeError):
+    """Every provider is inside a rate limit window. Carries the seconds until one frees up."""
+
+    def __init__(self, seconds: float) -> None:
+        super().__init__(f"all providers hit a rate limit, retry after {seconds:.1f}s")
+        self.seconds = seconds
+
+
+# providers word it differently: groq "try again in 1m12.5s", gemini "Please retry in 34.9s"
+_MESSAGE_DELAY = re.compile(r"(?:try again|retry) in (?:(\d+)m)?([\d.]+)s", re.IGNORECASE)
+# and again in structured form: "retryDelay: '34s'", "retry_delay { seconds: 34 }", "retry-after: 60"
+_FIELD_DELAY = re.compile(r"retry[-_ ]?(?:delay|after)\D{0,15}?(\d+(?:\.\d+)?)", re.IGNORECASE)
+
+# a per-day quota will not clear inside a run, unlike a per-minute one
+_DAILY_QUOTA_MARKERS = ("perday", "per day", "requests per day")
+_DAILY_COOLDOWN_SECONDS = 3600.0
+# sleeping the exact hint can land a hair early and 429 again
+_COOLDOWN_PAD_SECONDS = 1.0
+
+_cooldown_until: dict[str, float] = {}
+
+
+def retry_after_seconds(exc: BaseException) -> float | None:
+    """Seconds the provider asked us to wait, read from its own error text. None if it didn't say."""
+    text = str(exc)
+    stated = _MESSAGE_DELAY.search(text)
+    if stated:
+        return float(stated.group(1) or 0) * 60 + float(stated.group(2))
+    field = _FIELD_DELAY.search(text)
+    return float(field.group(1)) if field else None
+
+
+def _park(provider: str, exc: BaseException) -> float | None:
+    """Stop asking a rate-limited provider until it said to come back. Returns seconds parked."""
+    if any(marker in str(exc).lower() for marker in _DAILY_QUOTA_MARKERS):
+        seconds = _DAILY_COOLDOWN_SECONDS
+    else:
+        hinted = retry_after_seconds(exc)
+        if hinted is None:
+            return None  # a connection blip is not a quota, don't sideline a healthy provider
+        seconds = hinted + _COOLDOWN_PAD_SECONDS
+    _cooldown_until[provider] = time.monotonic() + seconds
+    return seconds
+
+
+def _available(chain: list[str]) -> list[str]:
+    now = time.monotonic()
+    return [name for name in chain if _cooldown_until.get(name, 0.0) <= now]
+
+
+def cooldown_remaining() -> float:
+    """Seconds until the first parked provider frees up. 0.0 when none are parked."""
+    if not _cooldown_until:
+        return 0.0
+    return max(0.0, min(_cooldown_until.values()) - time.monotonic())
+
+
+def chain_wait_seconds() -> float:
+    """Seconds until any configured provider can be called. 0.0 when one is free right now."""
+    chain = configured_chain()
+    if not chain or _available(chain):
+        return 0.0
+    return max(0.0, min(_cooldown_until[name] for name in chain) - time.monotonic())
+
+
+def reset_cooldowns() -> None:
+    """Forget every parked provider. Used by tests and on a fresh process."""
+    _cooldown_until.clear()
+
+
 def _tier(task_type: str) -> str:
     return _TASK_TIER.get(task_type, "reasoning")
 
@@ -124,6 +195,12 @@ def _build_anthropic(settings: Settings, task_type: str) -> BaseChatModel:
 
 _BUILDERS = {"groq": _build_groq, "gemini": _build_gemini, "anthropic": _build_anthropic}
 
+# gpt-oss emits a native tool call when it sees a tool-shaped name in a json schema, which
+# groq then rejects with 400. json mode forces plain json text and disables tool calling.
+_JSON_MODE_BINDINGS: dict[str, dict[str, Any]] = {
+    "groq": {"response_format": {"type": "json_object"}},
+}
+
 
 def configured_chain() -> list[str]:
     """Providers with a key present, in fallback order. Empty means nothing is configured."""
@@ -142,7 +219,7 @@ def get_llm(task_type: str = "reasoning", provider: str | None = None) -> BaseCh
     if not chain:
         raise LLMConfigError(
             "No LLM provider key found. Set GROQ_API_KEY in .env "
-            "(free at console.groq.com), or GEMINI_API_KEY / CEREBRAS_API_KEY."
+            "(free at console.groq.com), or GEMINI_API_KEY / ANTHROPIC_API_KEY."
         )
 
     chosen = provider or chain[0]
@@ -169,6 +246,7 @@ def is_retryable(exc: BaseException) -> bool:
 async def invoke_with_fallback(
     messages: str | list[BaseMessage],
     task_type: str = "reasoning",
+    json_mode: bool = False,
     **kwargs: Any,
 ) -> BaseMessage:
     """Invoke down the provider chain, hopping on rate limits. Raises if all providers fail."""
@@ -178,22 +256,31 @@ async def invoke_with_fallback(
             "No LLM provider key found. Set GROQ_API_KEY in .env (free at console.groq.com)."
         )
 
-    for position, provider in enumerate(chain):
+    # a provider that just said "try again in 58s" will say it again, so skip it until then
+    usable = _available(chain)
+    if not usable:
+        raise ProvidersCoolingDown(cooldown_remaining())
+
+    for position, provider in enumerate(usable):
         llm = _cached_llm(provider, task_type)
+        if json_mode and provider in _JSON_MODE_BINDINGS:
+            llm = llm.bind(**_JSON_MODE_BINDINGS[provider])
         started = time.perf_counter()
         try:
             response = await llm.ainvoke(messages, **kwargs)
         except Exception as exc:
-            is_last = position == len(chain) - 1
-            if is_last or not is_retryable(exc):
+            retryable = is_retryable(exc)
+            parked = _park(provider, exc) if retryable else None
+            if position == len(usable) - 1 or not retryable:
                 logger.bind(provider=provider, task=task_type, error=str(exc)[:200]).error(
                     "llm.failed"
                 )
                 raise
             logger.bind(
                 provider=provider,
-                to=chain[position + 1],
+                to=usable[position + 1],
                 reason=type(exc).__name__,
+                parked_for=parked,
                 task=task_type,
             ).warning("llm.fallback")
             continue

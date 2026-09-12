@@ -23,7 +23,10 @@ exist yet rather than reporting them as failures.
 uv run python -m amaris.observability                      # phase 0, always works
 uv run python -c "from amaris.llm.router import get_llm; print(get_llm('planning'))"   # phase 1
 uv run python -m amaris.memory.redis_memory --selftest     # phase 3, needs docker
+uv run python -m amaris.memory.mem0_memory --selftest      # phase 3, needs --extra memory
 uv run python -m amaris.graph.pipeline --query "What is LangGraph?"                    # phase 5, needs keys
+uv run python -m amaris.evaluation.harness --golden tests/golden/queries.yaml  # phase 6, needs --extra evaluation + keys
+curl -s localhost:8000/ready                               # phase 7, start uvicorn amaris.api.main:app first
 curl -s -X POST localhost:8000/research -H "Content-Type: application/json" -d '{"query":"What is MCP?"}'   # phase 7
 ```
 

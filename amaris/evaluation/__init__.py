@@ -1,1 +1,1 @@
-"""RAGAS scoring of the final report. Phase 6, non-blocking."""
+"""Three layers — retrieval (RAGAS), report (RAGAS), trajectory (custom). See ADR-017."""

@@ -115,3 +115,58 @@ async def test_thresholds_in_the_prompt_come_from_settings(
 
     assert str(agent.settings.quality_approve_threshold) in llm.prompts[0]
     assert str(agent.settings.research_quality_threshold) in llm.prompts[0]
+
+
+async def test_decision_log_records_what_the_rule_expected(
+    monkeypatch: pytest.MonkeyPatch, state
+) -> None:
+    """This is the only input trajectory_eval.py's routing_accuracy has."""
+    agent = SupervisorAgent()
+    patch_invoke(monkeypatch, agent, ScriptedLLM("planner"))
+
+    entry = (await agent.run(state))["decision_log"][0]
+    assert entry["to_agent"] == "planner"
+    assert entry["expected_agent"] == "planner"
+    assert entry["matched_rule"] == "rule_3_no_plan"
+    assert entry["llm_decided"] is True
+
+
+async def test_decision_log_flags_a_mismatch_between_llm_and_rule(
+    monkeypatch: pytest.MonkeyPatch, state
+) -> None:
+    """When the LLM ignores the documented rule, the log must make that visible, not hide it."""
+    state["research_plan"] = [{"task_id": "t1", "description": "d"}]
+    agent = SupervisorAgent()
+    # rule 6 says researcher (no sources yet); the scripted reply deliberately disagrees
+    patch_invoke(monkeypatch, agent, ScriptedLLM("analyst"))
+
+    entry = (await agent.run(state))["decision_log"][0]
+    assert entry["to_agent"] == "analyst"
+    assert entry["expected_agent"] == "researcher"
+    assert entry["matched_rule"] == "rule_6_thin_research"
+
+
+async def test_decision_log_marks_terminal_steps_as_not_llm_decided(
+    monkeypatch: pytest.MonkeyPatch, state
+) -> None:
+    """Rules 1-2 are code-decided — scoring them as a routing choice would be meaningless."""
+    state["error"] = "boom"
+    agent = SupervisorAgent()
+    patch_invoke(monkeypatch, agent, ScriptedLLM("planner"))
+
+    entry = (await agent.run(state))["decision_log"][0]
+    assert entry["llm_decided"] is False
+    assert entry["to_agent"] == FINISH
+    assert entry["matched_rule"] == "error_set"
+
+
+async def test_decision_log_appends_rather_than_replaces(
+    monkeypatch: pytest.MonkeyPatch, state
+) -> None:
+    state["decision_log"] = [{"step": 1, "to_agent": "planner"}]
+    agent = SupervisorAgent()
+    patch_invoke(monkeypatch, agent, ScriptedLLM("researcher"))
+
+    log = (await agent.run(state))["decision_log"]
+    assert len(log) == 2
+    assert log[1]["step"] == 2

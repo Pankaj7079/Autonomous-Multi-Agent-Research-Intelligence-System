@@ -68,7 +68,12 @@ class WriterAgent(BaseAgent):
             revision=state["revision_count"],
         ).info("writer.done")
 
-        return {"draft_report": report, "citations": citations}
+        return {
+            "draft_report": report,
+            "citations": citations,
+            # consume the hint: leaving it set makes the supervisor route here forever
+            "routing_hint": "",
+        }
 
     def _revision_block(self, state: GraphState) -> str:
         """Only present on a rewrite, so the first draft isn't told to fix nothing."""

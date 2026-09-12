@@ -58,6 +58,11 @@ class Settings(BaseSettings):
     research_quality_threshold: float = Field(default=0.60, ge=0.0, le=1.0)
     quality_approve_threshold: float = Field(default=0.72, ge=0.0, le=1.0)
 
+    # groq's tokens-per-minute window is ~60s, so a shorter retry budget can never recover from it
+    llm_retry_budget_seconds: float = Field(default=75.0, ge=0.0)
+    # ragas makes one judge call per metric per context, so it needs its own ceiling
+    ragas_timeout_seconds: float = Field(default=120.0, ge=1.0)
+
     groq_model_reasoning: str = "openai/gpt-oss-120b"
     groq_model_fast: str = "openai/gpt-oss-20b"
     gemini_model_fallback: str = "gemini-3.6-flash"

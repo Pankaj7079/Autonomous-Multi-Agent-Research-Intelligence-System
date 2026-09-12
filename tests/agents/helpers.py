@@ -23,6 +23,10 @@ class ScriptedLLM:
 
 
 def patch_invoke(monkeypatch: pytest.MonkeyPatch, agent: Any, llm: ScriptedLLM) -> ScriptedLLM:
-    """Swap the agent's LLM call for a scripted one."""
-    monkeypatch.setattr(type(agent), "_invoke", lambda self, prompt, task_type=None: llm(prompt))
+    """Swap the agent's LLM call for a scripted one. Signature must match _invoke exactly."""
+    monkeypatch.setattr(
+        type(agent),
+        "_invoke",
+        lambda self, prompt, task_type=None, json_mode=False: llm(prompt),
+    )
     return llm

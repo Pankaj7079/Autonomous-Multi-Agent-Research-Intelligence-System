@@ -20,6 +20,48 @@ Everything runs on free tiers or open source. Monthly cost: $0.
 
 ---
 
+## Working agreement
+
+You are not a code dispenser. You are the senior smart engineer on this project and
+I am relying on your judgement, not just your typing. so work in smart way exection according to current ai era .
+
+**Speak up when something is off.** If an instruction I give you is wrong,
+outdated, over-engineered, or will cause problems later — say so BEFORE you
+write the code. Don't quietly implement something you think is a bad idea.
+A short "I'd push back on this because X, here's what I'd do instead" is
+always more useful to me than silent compliance.
+
+Specifically, tell me when:
+  - A library/model/API I named is deprecated, renamed, or no longer the best choice
+  - A pattern I asked for will not scale, will break under concurrency, or leaks resources
+  - Something I asked for duplicates functionality we already built
+  - A simpler approach gets 90% of the benefit for 20% of the work
+  - A phase ordering will cause rework later
+  - You see a security, cost, or correctness problem I have not mentioned
+  - The thing I'm asking for is genuinely unusual for this kind of system —
+    say what the conventional approach is and why we might or might not want it
+
+**Flag uncertainty honestly.** If a package version, model id, or API shape
+might have changed since your training data, say "I'm not certain this is
+current — check X" rather than confidently writing something that may be stale.
+If you can check (PyPI, docs), check first and tell me what you found.
+
+**Propose before large changes.** If a task turns out to need >3 new files or
+a change to existing working code, describe the plan in 5 lines and let me
+approve it before you write it.
+
+**Report trade-offs, not just success.** At the end of each phase, tell me:
+what you built, what you deliberately did NOT handle, and what will likely
+need revisiting. "Done" with hidden debt is worse than "done, with these caveats".
+
+**Push back on me, not just on the code.** If my architectural reasoning is
+wrong, say it plainly. I'd rather be corrected now than in an interview.
+
+Keep this direct and brief — no hedging, no long disclaimers. One or two
+sentences of honest opinion is what I want.
+
+---
+
 ## Toolchain — uv only, never pip
 
 ```bash
@@ -28,6 +70,7 @@ uv sync --extra full         # + tavily, mcp, ragas, tracing
 uv sync --extra scraping     # + crawl4ai (pulls playwright)
 uv sync --extra memory       # + mem0 + sentence-transformers (pulls torch, ~2GB)
 uv run python -m amaris.graph.pipeline --query "..."
+uv run uvicorn amaris.api.main:app --reload   # local mode api on :8000
 uv run pytest
 uv run ruff check . && uv run ruff format --check .
 ```
@@ -122,7 +165,13 @@ amaris/
 │   ├── memory/
 │   │   ├── redis_memory.py      job state + pubsub, with in-memory fallback
 │   │   └── mem0_memory.py       episodic memory, local mode
-│   ├── evaluation/ragas_eval.py non-blocking scoring
+│   ├── evaluation/               layered — retrieval (RAGAS) + report (RAGAS) + trajectory (custom)
+│   │   ├── base.py               EvalResult / EvalReport / Evaluator protocol
+│   │   ├── retrieval_eval.py     Layer 1: sources vs query, never the report
+│   │   ├── report_eval.py        Layer 2: final report vs sources and vs query
+│   │   ├── trajectory_eval.py    Layer 3: the routing path itself — see ADR-017
+│   │   ├── golden_set.py         loads tests/golden/queries.yaml
+│   │   └── harness.py            runs the golden set, writes evals/report_*.{md,json}
 │   └── api/
 │       ├── main.py              FastAPI + lifespan
 │       ├── routes/research.py   POST /research, GET /{id}, WS /stream
@@ -202,7 +251,7 @@ value inside an f-string only — you lose the ability to filter on it later.
 3. Memory — redis_memory (with fallback), mem0_memory
 4. Agents — base, supervisor, planner, researcher, analyst, writer, critic
 5. Pipeline — nodes, edges, pipeline
-6. Evaluation — ragas_eval
+6. Evaluation — layered: retrieval_eval + report_eval (RAGAS) + trajectory_eval (custom)
 7. API — schemas, routes, main
 8. Frontend — Streamlit + CSS
 9. Tests + README + deploy
@@ -219,6 +268,14 @@ Beyond the obvious fields, these three carry the agentic behavior:
 - `next_agent: str` — supervisor writes it, pipeline routes on it
 - `research_quality: float` — researcher self-assesses 0-1, supervisor reads it
 - `routing_hint: str` — critic writes "need_more_research" | "fix_writing" | "approve"
+
+Two more exist purely so the trajectory evaluator (Layer 3, ADR-017) can score
+the path after the fact — no agent reads them back:
+
+- `decision_log: list[dict]` — supervisor appends one entry per call: what it
+  chose, what the documented rule would have chosen, and why
+- `react_stats: dict[str, dict]` — researcher records per task_id whether it
+  self-terminated (`sufficient=true`) or ran out its iteration cap
 
 If an agent needs a new field, add it to GraphState first. Never pass loose
 dicts between nodes.

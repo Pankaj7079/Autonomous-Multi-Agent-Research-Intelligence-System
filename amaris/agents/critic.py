@@ -67,7 +67,7 @@ class CriticAgent(BaseAgent):
 
         scores = self._scores(payload.get("scores"))
         overall = self._overall(payload.get("overall"), scores)
-        hint = self._hint(payload.get("routing_hint"), scores)
+        hint = self._hint(payload.get("routing_hint"), scores, overall)
 
         logger.bind(
             overall=overall,
@@ -97,9 +97,17 @@ class CriticAgent(BaseAgent):
             return value
         return round(sum(scores.values()) / len(DIMENSIONS), 3)
 
-    def _hint(self, raw: Any, scores: dict[str, float]) -> str:
-        """An unrecognised hint would silently strand the supervisor, so derive one instead."""
+    def _hint(self, raw: Any, scores: dict[str, float], overall: float) -> str:
+        """An unrecognised or self-contradictory hint would strand the supervisor."""
         cleaned = str(raw or "").strip().lower()
+
+        # a passing score plus "fix_writing" sends the writer round forever, so trust the score
+        if overall >= self.settings.quality_approve_threshold and cleaned != APPROVE:
+            logger.bind(overall=overall, asked_for=cleaned[:30]).warning(
+                "critic.contradictory_hint"
+            )
+            return APPROVE
+
         if cleaned in VALID_HINTS:
             return cleaned
 

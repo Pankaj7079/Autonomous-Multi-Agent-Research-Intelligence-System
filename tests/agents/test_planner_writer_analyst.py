@@ -188,3 +188,14 @@ async def test_writer_with_no_sources_is_told_not_to_invent(
     update = await agent.run(state)
     assert update["citations"] == []
     assert "instead of inventing citations" in llm.prompts[0]
+
+
+async def test_writer_consumes_the_routing_hint(
+    monkeypatch: pytest.MonkeyPatch, drafted_state
+) -> None:
+    """A hint left set outranks every other rule, so the supervisor routes here forever."""
+    drafted_state["routing_hint"] = "fix_writing"
+    agent = WriterAgent()
+    patch_invoke(monkeypatch, agent, ScriptedLLM("rewritten report"))
+
+    assert (await agent.run(drafted_state))["routing_hint"] == ""

@@ -35,6 +35,11 @@ What to look for:
 - **FINISH straight after an error** — a node failed, look at step 4
 - **writer → critic → writer → critic** — revision loop; check it stopped at
   `MAX_REVISIONS`
+- **a long gap between two node.complete lines with no path change** — check
+  for `agent.retry_wait` / `agent.chain_parked` in between. That is the retry
+  budget waiting out a provider's own stated rate-limit window, not a hang —
+  see ADR-002 in docs/DECISIONS.md. Only `agent.retry_budget_spent` right
+  before `node.failed` is an actual give-up.
 
 ## 3. The full timeline
 

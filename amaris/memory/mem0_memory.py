@@ -16,6 +16,9 @@ VECTOR_SIZE = 384
 # single-user system, so one namespace is enough
 USER_ID = "amaris"
 
+# a full report is mostly headings and citations, which mem0 extraction gains nothing from
+SUMMARY_CHAR_LIMIT = 2000
+
 _unavailable_reason: str | None = None
 
 
@@ -138,6 +141,33 @@ async def add_research_finding(query: str, finding: str, url: str = "") -> bool:
         return False
 
     logger.bind(chars=len(finding), url=url[:120]).debug("mem0.stored")
+    return True
+
+
+async def add_session_summary(query: str, report: str, scores: dict[str, float]) -> bool:
+    """Store a finished run so a later session recalls the conclusion, not just the findings."""
+    memory = _memory()
+    if memory is None or not report.strip():
+        return False
+
+    # only the opening section: the whole report would bury mem0's extraction in boilerplate
+    conclusion = report.strip()[:SUMMARY_CHAR_LIMIT]
+    messages = [
+        {"role": "user", "content": query},
+        {"role": "assistant", "content": conclusion},
+    ]
+    metadata = {"kind": "session_summary", **{k: round(v, 3) for k, v in scores.items()}}
+
+    try:
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(
+            None, lambda: memory.add(messages, user_id=USER_ID, metadata=metadata)
+        )
+    except Exception as exc:
+        logger.bind(error=str(exc)[:200]).warning("mem0.session_store_failed")
+        return False
+
+    logger.bind(chars=len(conclusion), scores=len(scores)).debug("mem0.session_stored")
     return True
 
 
