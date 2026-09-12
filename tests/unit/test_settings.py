@@ -36,6 +36,14 @@ def test_key_returns_none_when_unset_and_plain_text_when_set() -> None:
     assert _settings(groq_api_key="gsk_abc").key("groq_api_key") == "gsk_abc"
 
 
+def test_unedited_env_example_placeholders_read_as_unset() -> None:
+    """Copying .env.example without editing must give the setup error, not a 401 from groq."""
+    assert _settings(groq_api_key="gsk_your_key_here").key("groq_api_key") is None
+    assert _settings(gemini_api_key="AIza_your_key_here").key("gemini_api_key") is None
+    assert _settings(groq_api_key="   ").key("groq_api_key") is None
+    assert _settings(groq_api_key="gsk_realLooKingKey123").key("groq_api_key") is not None
+
+
 def test_secret_keys_are_masked_in_repr() -> None:
     """A settings object gets logged eventually — the key must not come with it."""
     assert "gsk_abc" not in repr(_settings(groq_api_key="gsk_abc"))

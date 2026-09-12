@@ -99,7 +99,7 @@ amaris/
 │   ├── observability/
 │   │   ├── logging.py           loguru sink setup, JSONL file + pretty console
 │   │   └── context.py           session_id / agent contextvars bound to logs
-│   ├── llm/router.py            groq primary, cerebras alt, gemini fallback
+│   ├── llm/router.py            groq primary, gemini fallback, anthropic last resort
 │   ├── agents/
 │   │   ├── base_agent.py        abstract: llm setup, retry, structured output
 │   │   ├── supervisor.py        THE AGENTIC CORE — llm decides routing

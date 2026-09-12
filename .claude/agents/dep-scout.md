@@ -32,7 +32,7 @@ with little notice. Guessing produces an install that fails or a router that
 
 ## For a provider model id
 
-Fetch the provider's own current model list — Groq, Cerebras, Google AI Studio,
+Fetch the provider's own current model list — Groq, Google AI Studio, Anthropic,
 Z.ai/GLM — not a blog post about it. Report:
 
 - the exact id string to put in `.env.example`

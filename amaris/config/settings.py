@@ -10,6 +10,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DeploymentMode = Literal["local", "cloud"]
 
+# substrings that only appear in .env.example's dummy values
+_PLACEHOLDER_MARKERS = ("your_key_here", "your-key-here", "your_key", "changeme")
+
 
 class Settings(BaseSettings):
     """Every field mirrors a var in .env.example. Defaults must work with no .env at all."""
@@ -27,7 +30,7 @@ class Settings(BaseSettings):
     # SecretStr so a stray repr() or log of the settings object can't leak a key
     groq_api_key: SecretStr | None = None
     gemini_api_key: SecretStr | None = None
-    cerebras_api_key: SecretStr | None = None
+    anthropic_api_key: SecretStr | None = None
     tavily_api_key: SecretStr | None = None
 
     log_level: str = "INFO"
@@ -50,13 +53,16 @@ class Settings(BaseSettings):
     # bounds only — the cross-field check (research < approve) belongs to Tier 1 patch 3
     max_revisions: int = Field(default=2, ge=1)
     max_react_iterations: int = Field(default=4, ge=1)
+    # hard stop on the supervisor loop: an llm picks the path, so code guarantees it ends
+    max_supervisor_steps: int = Field(default=15, ge=3)
     research_quality_threshold: float = Field(default=0.60, ge=0.0, le=1.0)
     quality_approve_threshold: float = Field(default=0.72, ge=0.0, le=1.0)
 
-    groq_model_reasoning: str = "llama-3.3-70b-versatile"
-    groq_model_fast: str = "llama-3.1-8b-instant"
-    cerebras_model: str = "gpt-oss-120b"
-    gemini_model_fallback: str = "gemini-2.0-flash"
+    groq_model_reasoning: str = "openai/gpt-oss-120b"
+    groq_model_fast: str = "openai/gpt-oss-20b"
+    gemini_model_fallback: str = "gemini-3.6-flash"
+    # last-resort fallback only — not a free-tier provider, skipped silently if no key
+    anthropic_model: str = "claude-sonnet-5"
 
     @property
     def is_local(self) -> bool:
@@ -69,17 +75,23 @@ class Settings(BaseSettings):
         return self.deployment_mode == "cloud"
 
     def key(self, name: str) -> str | None:
-        """Plain value of a SecretStr field, or None when it isn't configured."""
+        """Plain value of a SecretStr field, or None when it isn't really configured."""
         secret: SecretStr | None = getattr(self, name, None)
-        return secret.get_secret_value() if secret else None
+        if not secret:
+            return None
+        value = secret.get_secret_value().strip()
+        # an unedited copy of .env.example must read as unset, not as a bad key
+        if not value or any(marker in value.lower() for marker in _PLACEHOLDER_MARKERS):
+            return None
+        return value
 
     @property
     def configured_llm_providers(self) -> list[str]:
         """Providers with a key present, in fallback order."""
         pairs = [
             ("groq", "groq_api_key"),
-            ("cerebras", "cerebras_api_key"),
             ("gemini", "gemini_api_key"),
+            ("anthropic", "anthropic_api_key"),
         ]
         return [provider for provider, field in pairs if self.key(field)]
 

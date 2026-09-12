@@ -53,8 +53,8 @@ extra is absent. Rationale in [ADR-009](docs/DECISIONS.md).
 | 0 | Scaffolding | docs, uv project, package layout, logging | ✅ done |
 | 1 | Foundation | settings.py, state.py, llm/router.py | ✅ done |
 | 2 | Tools | search, scraper, code executor, vector, MCP | ✅ done |
-| 3 | Memory | redis (with fallback), mem0 | ⬜ |
-| 4 | Agents | supervisor + planner/researcher/analyst/writer/critic | ⬜ |
+| 3 | Memory | redis (with fallback), mem0 | ✅ done |
+| 4 | Agents | supervisor + planner/researcher/analyst/writer/critic | ✅ done |
 | 5 | Pipeline | nodes, edges, StateGraph, checkpointing | ⬜ |
 | 6 | Evaluation | RAGAS scoring, non-blocking | ⬜ |
 | 7 | API | FastAPI + WebSocket progress stream | ⬜ |
@@ -73,7 +73,7 @@ keyed on a `session_id` that appears on every log line:
 ```
 16:42:43.199 INFO  36333434:supervisor  supervisor.route  next_agent=researcher quality=0.0
 16:42:43.199 DEBUG 36333434:researcher  researcher.react_step  task_id=t1 iteration=1
-16:42:43.199 WARN  36333434:researcher  llm.fallback  provider=groq to=cerebras reason=429
+16:42:43.199 WARN  36333434:researcher  llm.fallback  provider=groq to=gemini reason=429
 ```
 
 The same records land in `logs/amaris.jsonl` as JSON, with errors mirrored to
@@ -86,8 +86,8 @@ exact agent path the system chose. Details in
 | Layer | Choice | Free tier |
 |---|---|---|
 | Orchestration | LangGraph + SqliteSaver | open source |
-| LLM (primary) | Groq llama-3.3-70b / 3.1-8b | free, no card |
-| LLM (fallbacks) | Cerebras, Google Gemini 2.0 Flash | free, no card |
+| LLM (primary) | Groq openai/gpt-oss-120b / gpt-oss-20b | free, no card |
+| LLM (fallbacks) | Google Gemini 3.6 Flash (free), Anthropic Claude (paid, last resort) | mixed |
 | Search | DuckDuckGo (`ddgs`), Tavily optional | free / 1000 mo |
 | Scraping | Crawl4AI | open source |
 | Memory | mem0 + Qdrant | open source / 1GB cloud |

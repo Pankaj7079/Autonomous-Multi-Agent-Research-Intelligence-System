@@ -13,7 +13,7 @@ Human-in-the-loop is deliberately **not** in Tier 1 — do not add approval gate
 Part A of the original brief (uv migration) is already done — the repo was scaffolded
 on uv with a committed lock. Only add the GLM provider dependency here.
 
-Extend `llm/router.py` to a four-hop chain: **Groq → Cerebras → GLM/Z.ai → Gemini**.
+Extend `llm/router.py` to a four-hop chain: **Groq → Gemini → GLM/Z.ai → Anthropic**.
 
 - Add `GLM_API_KEY` and `GLM_MODEL` to settings and `.env.example`. Check PyPI for the
   currently maintained GLM/zhipuai package before pinning — say which you picked and why.

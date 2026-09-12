@@ -11,6 +11,13 @@ from amaris.llm import router
 from amaris.llm.router import LLMConfigError, configured_chain, get_llm, invoke_with_fallback
 
 
+class FakeMessage:
+    """Mimics BaseMessage.text — the real bug this project hit was content as a block list."""
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+
+
 class FakeLLM:
     """Minimal stand-in: either returns a canned reply or raises what the test wants."""
 
@@ -19,11 +26,11 @@ class FakeLLM:
         self.error = error
         self.calls = 0
 
-    async def ainvoke(self, messages: Any, **kwargs: Any) -> str:
+    async def ainvoke(self, messages: Any, **kwargs: Any) -> FakeMessage:
         self.calls += 1
         if self.error:
             raise self.error
-        return f"reply from {self.name}"
+        return FakeMessage(f"reply from {self.name}")
 
 
 @pytest.fixture
@@ -54,6 +61,12 @@ def test_chain_follows_fallback_order_and_skips_missing_keys(keys) -> None:
     assert configured_chain() == ["groq", "gemini"]
 
 
+def test_anthropic_is_last_since_it_is_not_free_tier(keys) -> None:
+    """Free providers are tried first — anthropic only runs when both of them fail."""
+    keys(groq_api_key="k", gemini_api_key="g", anthropic_api_key="a")
+    assert configured_chain() == ["groq", "gemini", "anthropic"]
+
+
 def test_get_llm_raises_with_actionable_message_when_nothing_configured(keys) -> None:
     keys()
     with pytest.raises(LLMConfigError, match="GROQ_API_KEY"):
@@ -62,8 +75,8 @@ def test_get_llm_raises_with_actionable_message_when_nothing_configured(keys) ->
 
 def test_get_llm_rejects_a_provider_without_a_key(keys) -> None:
     keys(groq_api_key="k")
-    with pytest.raises(LLMConfigError, match="cerebras"):
-        get_llm("planning", provider="cerebras")
+    with pytest.raises(LLMConfigError, match="anthropic"):
+        get_llm("planning", provider="anthropic")
 
 
 @pytest.mark.parametrize(
@@ -103,7 +116,7 @@ async def test_falls_through_to_the_next_provider_on_a_rate_limit(keys, fake_pro
         gemini=FakeLLM("gemini"),
     )
 
-    assert await invoke_with_fallback("hello") == "reply from gemini"
+    assert (await invoke_with_fallback("hello")).text == "reply from gemini"
     assert llms["groq"].calls == 1
 
 
@@ -126,6 +139,15 @@ async def test_raises_when_every_provider_rate_limits(keys, fake_providers) -> N
 
     with pytest.raises(RuntimeError, match="quota"):
         await invoke_with_fallback("hello")
+
+
+def test_text_property_normalises_gemini_3x_block_content() -> None:
+    """Gemini 3.x returns content as a block list, not a string — .content.strip() breaks on it."""
+    from langchain_core.messages import AIMessage
+
+    plain = AIMessage(content="researcher")
+    blocks = AIMessage(content=[{"type": "text", "text": "researcher", "extras": {}}])
+    assert plain.text == blocks.text == "researcher"
 
 
 async def test_invoke_with_no_keys_explains_how_to_fix_it(keys) -> None:

@@ -17,7 +17,7 @@ def main() -> None:
 
     with agent_context("researcher"), timed("node.researcher", node="researcher") as fields:
         logger.bind(task_id="t1", iteration=1, action="web_search").debug("researcher.react_step")
-        logger.bind(provider="groq", to="cerebras", reason="429").warning("llm.fallback")
+        logger.bind(provider="groq", to="gemini", reason="429").warning("llm.fallback")
         fields["sources"] = 7
 
     with agent_context("critic"):

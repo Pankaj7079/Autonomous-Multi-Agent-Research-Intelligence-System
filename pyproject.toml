@@ -17,34 +17,30 @@ dependencies = [
     "langchain>=0.3.0",
     "langchain-core>=0.3.0",
     "langgraph-checkpoint-sqlite>=2.0.0",
-
     # llm providers — all free tier, no card
     "langchain-groq>=0.2.0",
     "langchain-google-genai>=2.0.0",
-    "langchain-cerebras>=0.5.0",
-
     # search (ddgs is the maintained rename of duckduckgo-search — see ADR-006)
     "ddgs>=9.0.0",
-
     # ops / storage clients that must exist in every deployment mode
     "redis[hiredis]>=5.0.0",
-    "qdrant-client>=1.12.0",
-
+    # capped: the client refuses to match a server more than one minor behind, and
+    # the newest released qdrant server image is 1.17.x
+    "qdrant-client>=1.12.0,<1.18.0",
     # backend
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
     "websockets>=13.0",
     "httpx>=0.27.0",
-
     # frontend
     "streamlit>=1.40.0",
-
     # utils
     "pydantic>=2.9.0",
     "pydantic-settings>=2.6.0",
     "python-dotenv>=1.0.0",
     "loguru>=0.7.0",
     "aiofiles>=24.0.0",
+    "langchain-anthropic>=1.7.2",
 ]
 
 [project.optional-dependencies]

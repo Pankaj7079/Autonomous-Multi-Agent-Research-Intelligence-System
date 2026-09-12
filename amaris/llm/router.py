@@ -42,13 +42,13 @@ _TASK_TEMPERATURE: dict[str, float] = {
 _DEFAULT_TEMPERATURE = 0.3
 _REQUEST_TIMEOUT = 60
 
-# order the fallback chain walks; Tier 1 patch 1 inserts glm before gemini
-FALLBACK_ORDER = ("groq", "cerebras", "gemini")
+# free-tier providers first, anthropic last since it needs a paid key
+FALLBACK_ORDER = ("groq", "gemini", "anthropic")
 
 _KEY_FIELDS = {
     "groq": "groq_api_key",
-    "cerebras": "cerebras_api_key",
     "gemini": "gemini_api_key",
+    "anthropic": "anthropic_api_key",
 }
 
 # a 429 from any provider looks different, so match on text rather than exception type
@@ -97,18 +97,6 @@ def _build_groq(settings: Settings, task_type: str) -> BaseChatModel:
     )
 
 
-def _build_cerebras(settings: Settings, task_type: str) -> BaseChatModel:
-    from langchain_cerebras import ChatCerebras
-
-    return ChatCerebras(
-        model=settings.cerebras_model,
-        api_key=settings.key("cerebras_api_key"),
-        temperature=_temperature(task_type),
-        timeout=_REQUEST_TIMEOUT,
-        max_retries=0,
-    )
-
-
 def _build_gemini(settings: Settings, task_type: str) -> BaseChatModel:
     from langchain_google_genai import ChatGoogleGenerativeAI
 
@@ -121,7 +109,20 @@ def _build_gemini(settings: Settings, task_type: str) -> BaseChatModel:
     )
 
 
-_BUILDERS = {"groq": _build_groq, "cerebras": _build_cerebras, "gemini": _build_gemini}
+def _build_anthropic(settings: Settings, task_type: str) -> BaseChatModel:
+    from langchain_anthropic import ChatAnthropic
+
+    # single model regardless of tier — this fallback rarely runs, so it isn't worth tiering
+    return ChatAnthropic(
+        model=settings.anthropic_model,
+        anthropic_api_key=settings.key("anthropic_api_key"),
+        temperature=_temperature(task_type),
+        default_request_timeout=_REQUEST_TIMEOUT,
+        max_retries=0,
+    )
+
+
+_BUILDERS = {"groq": _build_groq, "gemini": _build_gemini, "anthropic": _build_anthropic}
 
 
 def configured_chain() -> list[str]:
@@ -201,6 +202,7 @@ async def invoke_with_fallback(
             provider=provider,
             model=getattr(llm, "model_name", None) or getattr(llm, "model", "?"),
             task=task_type,
+            chars=len(response.text),  # gemini 3.x content is a block list, not a string
             ms=round((time.perf_counter() - started) * 1000, 1),
         ).debug("llm.call")
         return response

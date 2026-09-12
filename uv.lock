@@ -140,7 +140,7 @@ dependencies = [
     { name = "fastapi" },
     { name = "httpx" },
     { name = "langchain" },
-    { name = "langchain-cerebras" },
+    { name = "langchain-anthropic" },
     { name = "langchain-core" },
     { name = "langchain-google-genai" },
     { name = "langchain-groq" },
@@ -211,7 +211,7 @@ requires-dist = [
     { name = "fastmcp", marker = "extra == 'mcp'", specifier = ">=2.0.0" },
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "langchain", specifier = ">=0.3.0" },
-    { name = "langchain-cerebras", specifier = ">=0.5.0" },
+    { name = "langchain-anthropic", specifier = ">=1.7.2" },
     { name = "langchain-core", specifier = ">=0.3.0" },
     { name = "langchain-google-genai", specifier = ">=2.0.0" },
     { name = "langchain-groq", specifier = ">=0.2.0" },
@@ -226,7 +226,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.9.0" },
     { name = "pydantic-settings", specifier = ">=2.6.0" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
-    { name = "qdrant-client", specifier = ">=1.12.0" },
+    { name = "qdrant-client", specifier = ">=1.12.0,<1.18.0" },
     { name = "ragas", marker = "extra == 'evaluation'", specifier = ">=0.2.0" },
     { name = "redis", extras = ["hiredis"], specifier = ">=5.0.0" },
     { name = "sentence-transformers", marker = "extra == 'memory'", specifier = ">=3.0.0" },
@@ -262,6 +262,24 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/5f/56/a8120250d128bed162cd73c76d45f6ef9991f3e068f62a8ee060afa3104a/annotated_types-0.8.0.tar.gz", hash = "sha256:13b2beaad985e05e2d6407ee4c4f35590b11f8d693a258a561055cac8f64cab7", size = 15893, upload-time = "2026-07-23T20:16:13.995Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/99/91/8acff4f5e50511b911bbccb72b8628a49c68ce14148cd9f6431094859a90/annotated_types-0.8.0-py3-none-any.whl", hash = "sha256:f072f4d804ea359e4eaf198b1af7a8b0943881a87f31bb764f8bf219bb9419e0", size = 13427, upload-time = "2026-07-23T20:16:12.938Z" },
+]
+
+[[package]]
+name = "anthropic"
+version = "1.5.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "docstring-parser" },
+    { name = "httpx2" },
+    { name = "jiter" },
+    { name = "pydantic" },
+    { name = "sniffio" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/6e/43/6f3f6006f5216d43a059a1a856d275ef6536cdfa94883b64cc04d7873cb7/anthropic-1.5.0.tar.gz", hash = "sha256:b25f87f5758861f25993383a5c9bf274eb6e0f1b010c84019ad91854cb4e1bc6", size = 1156657, upload-time = "2026-09-10T17:45:35.93Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c2/1c/c32fce35ca0be0205f2377d2238e3ed73dea5abc2be09d15fbd032091d60/anthropic-1.5.0-py3-none-any.whl", hash = "sha256:d9ce04b29ad1f7025dda3e3bc478cde8d2924d2de5417d2d4a4bb0378ecbc2a6", size = 1235236, upload-time = "2026-09-10T17:45:34.216Z" },
 ]
 
 [[package]]
@@ -1580,16 +1598,17 @@ wheels = [
 ]
 
 [[package]]
-name = "langchain-cerebras"
-version = "0.8.2"
+name = "langchain-anthropic"
+version = "1.7.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
+    { name = "anthropic" },
     { name = "langchain-core" },
-    { name = "langchain-openai" },
+    { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/64/d8/76356d5361b3dd6e1febcc62cc83acc01a88f7fca43b836d4e3a72434a37/langchain_cerebras-0.8.2.tar.gz", hash = "sha256:1594f87d08955a141269d48527d9a636827f6cb60167c447d8c5969eeaa9c8c7", size = 11267, upload-time = "2025-11-24T18:14:56.356Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/74/67/1a4f3b905d95192c54bf418ce50e058e2b7b330700c33f042622137b6c16/langchain_anthropic-1.7.2.tar.gz", hash = "sha256:0d39665211b3b40421de8be621536c4e32149500d20a75ee4338cac4ae97db19", size = 751259, upload-time = "2026-09-10T19:12:54.99Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/fc/f9/239509fccf433f7cb34f8d2cf15885e4eda5e04f1f3110da295543fbaec5/langchain_cerebras-0.8.2-py3-none-any.whl", hash = "sha256:ca956bd8906e4760d903d3b9c614913488a87e44ee61522fafd66267dfb6582f", size = 9961, upload-time = "2025-11-24T18:14:55.305Z" },
+    { url = "https://files.pythonhosted.org/packages/1d/84/436d1f5dea354ec7357e5cd9756a15765e828da7faebf2837cf60f3a638d/langchain_anthropic-1.7.2-py3-none-any.whl", hash = "sha256:9d114c3766f57bbffe8e84093efe396306520c51587263b96d00c055d3bb8370", size = 60957, upload-time = "2026-09-10T19:12:53.693Z" },
 ]
 
 [[package]]
@@ -2989,7 +3008,7 @@ wheels = [
 
 [[package]]
 name = "qdrant-client"
-version = "1.19.0"
+version = "1.17.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "grpcio" },
@@ -3000,9 +3019,9 @@ dependencies = [
     { name = "pydantic" },
     { name = "urllib3" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/3a/33/c6e4ec45b4fca5a0b808e8804e60be54a6d7505b68b53c0b1d0d62ba86c1/qdrant_client-1.19.0.tar.gz", hash = "sha256:365395a04b0a26c309b25b7d8b1c99ef2071ec9a2b74bc8a5fd3b7a3642fe963", size = 350953, upload-time = "2026-08-04T14:32:56.923Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/30/dd/f8a8261b83946af3cd65943c93c4f83e044f01184e8525404989d22a81a5/qdrant_client-1.17.1.tar.gz", hash = "sha256:22f990bbd63485ed97ba551a4c498181fcb723f71dcab5d6e4e43fe1050a2bc0", size = 344979, upload-time = "2026-03-13T17:13:44.678Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/fc/3c/480c61cc8d5a3e76bb44e86231f408c93643e5498beadbbeb381ab55d02b/qdrant_client-1.19.0-py3-none-any.whl", hash = "sha256:13602a2b3478a95ecdf42f97b93d7f703b63a3361cd912a04495a33a5ac14121", size = 396157, upload-time = "2026-08-04T14:32:55.734Z" },
+    { url = "https://files.pythonhosted.org/packages/68/69/77d1a971c4b933e8c79403e99bcbb790463da5e48333cc4fd5d412c63c98/qdrant_client-1.17.1-py3-none-any.whl", hash = "sha256:6cda4064adfeaf211c751f3fbc00edbbdb499850918c7aff4855a9a759d56cbd", size = 389947, upload-time = "2026-03-13T17:13:43.156Z" },
 ]
 
 [[package]]
