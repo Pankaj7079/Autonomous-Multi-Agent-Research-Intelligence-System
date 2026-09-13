@@ -1,10 +1,10 @@
 # streamlit's own chrome reads these, so widgets match the tokens in frontend/styles.py
 [theme]
 base = "dark"
-primaryColor = "#58a6ff"
-backgroundColor = "#0d1117"
-secondaryBackgroundColor = "#161b22"
-textColor = "#e6edf3"
+primaryColor = "#4da6ff"
+backgroundColor = "#0a0d13"
+secondaryBackgroundColor = "#11151d"
+textColor = "#dde5f0"
 
 [server]
 headless = true

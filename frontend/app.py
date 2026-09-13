@@ -23,26 +23,25 @@ from amaris.config.validate import ConfigReport, log_report, validate_config
 from amaris.observability.logging import configure_from_settings, logger
 from amaris.safety.guardrails import validate_input
 from frontend.components import (
-    agent_progress_tracker,
-    citation_list,
-    critic_verdict,
-    decision_trace,
-    evaluation_layers,
-    event_log,
-    raw_inspector,
-    react_discipline,
-    run_header,
-    run_stats,
-    score_dashboard,
-    system_panel,
+    example_queries,
+    hero,
+    history_sidebar,
+    label,
+    provider_strip,
+    record_run,
+    topbar,
 )
 from frontend.styles import inject_css
+from frontend.views import landing, live_run, results
 
 TERMINAL = ("done", "failed")
 HTTP_TIMEOUT_SECONDS = 30.0
 
 EventSink = Callable[[ProgressEvent], None]
 RunOutcome = tuple[ResearchResult | None, str, str | None]
+
+# one place to clear, so a new run never leaves half of the previous one on screen
+RUN_KEYS = ("events", "result", "session_id", "error", "elapsed", "last_query")
 
 
 @st.cache_resource
@@ -104,84 +103,9 @@ async def _run_cloud(query: str, on_event: EventSink) -> RunOutcome:
     return result_from_state(final), final["session_id"], final["error"]
 
 
-def _header(mode: str) -> None:
-    from amaris.llm.router import configured_chain
-
-    chain = " → ".join(configured_chain()) or "no provider"
-    st.markdown(
-        '<div class="amaris-mast">'
-        '<span class="amaris-title">AMARIS</span>'
-        '<span class="amaris-sub">autonomous multi-agent research</span>'
-        f'<span class="amaris-pill">{mode}</span>'
-        f'<span class="amaris-pill">{chain}</span>'
-        "</div>",
-        unsafe_allow_html=True,
-    )
-
-
-def _config_notice(report: ConfigReport) -> None:
-    """Errors are loud, warnings stay folded away — a demo should not open on a yellow wall."""
-    for item in report.errors:
-        st.error(item)
-    if report.warnings:
-        with st.expander(f"{len(report.warnings)} configuration warning(s)"):
-            for item in report.warnings:
-                st.warning(item)
-
-
-def _render_result(
-    result: ResearchResult | None,
-    session_id: str,
-    error: str | None,
-    elapsed: float | None = None,
-    events: list[ProgressEvent] | None = None,
-) -> None:
-    events = events or []
-    if error:
-        st.warning(f"the run reported an error: {error}")
-    if result is None or not result.report:
-        st.error("no report was produced")
-        if events:
-            event_log(events)
-        return
-
-    run_stats(result.trace, result.agent_path, elapsed)
-    score_dashboard(result.scores)
-
-    # tabs, not a single scroll — each one answers a different question about the run
-    report_tab, exec_tab, sources_tab, eval_tab, raw_tab = st.tabs(
-        ["Report", "Execution", "Sources", "Evaluation", "Raw"]
-    )
-
-    with report_tab, st.container(border=True):
-        st.markdown(result.report)
-
-    with exec_tab:
-        st.caption(f"routing path · {' → '.join(result.agent_path)}")
-        agent_progress_tracker(events)
-        decision_trace(result.trace)
-        react_discipline(result.trace)
-        critic_verdict(result.trace)
-        st.markdown('<div class="amaris-section">event log</div>', unsafe_allow_html=True)
-        event_log(events)
-
-    with sources_tab:
-        citation_list(result.citations)
-
-    with eval_tab:
-        evaluation_layers(result.scores)
-
-    with raw_tab:
-        raw_inspector(result, events)
-
-    st.caption("session id — replays this run from logs/amaris.jsonl")
-    st.code(session_id, language=None)
-
-
 def _execute(query: str, is_cloud: bool) -> None:
-    """Drive one run, repainting the tracker on every event rather than polling for state."""
-    # drop the previous run first, or a failed new query leaves the old report on screen
-    for key in ("events", "result", "session_id", "error", "elapsed", "last_query"):
+    """Drive one run, repainting the live view on every event rather than polling for state."""
+    for key in RUN_KEYS:
         st.session_state.pop(key, None)
 
     events: list[ProgressEvent] = []
@@ -192,9 +116,7 @@ def _execute(query: str, is_cloud: bool) -> None:
         events.append(event)
         bar.progress(event.progress_pct / 100, text=event.message or event.agent)
         with track.container():
-            run_header(events)
-            agent_progress_tracker(events)
-            event_log(events)
+            live_run(events)
 
     runner = _run_cloud(query, on_event) if is_cloud else _run_local(query, on_event)
     started = time.perf_counter()
@@ -205,44 +127,89 @@ def _execute(query: str, is_cloud: bool) -> None:
         bar.empty()
         track.empty()
 
+    elapsed = time.perf_counter() - started
     st.session_state.update(
         events=events,
         result=result,
         session_id=session_id,
         error=error,
         last_query=query,
-        elapsed=time.perf_counter() - started,
+        elapsed=elapsed,
     )
+    record_run(query, result, events, session_id, error, elapsed)
     logger.bind(session_id=session_id, cloud=is_cloud).info("frontend.run_finished")
 
 
+def _sidebar() -> None:
+    """Deliberately lean — status and history only. Configuration lives in the System tab."""
+    st.markdown(
+        '<div class="sb-mark"><i>◆</i> AMARIS</div><div class="sb-sub">research console</div>',
+        unsafe_allow_html=True,
+    )
+    label("providers")
+    provider_strip()
+    st.caption("first is primary · a seconds value is a cooldown")
+
+    label("history")
+    history_sidebar()
+
+    if st.session_state.get("result") is not None:
+        label("session")
+        if st.button("new question", use_container_width=True):
+            for key in RUN_KEYS:
+                st.session_state.pop(key, None)
+            st.rerun()
+
+
 def main() -> None:
-    # set_page_config must be the first streamlit call on the page
-    st.set_page_config(page_title="AMARIS", page_icon="◆", layout="wide")
+    # set_page_config must be the first streamlit call on the page; the sidebar carries
+    # status and history, so it must not open collapsed
+    st.set_page_config(
+        page_title="AMARIS",
+        page_icon="◆",
+        layout="wide",
+        initial_sidebar_state="expanded",
+    )
     report = _boot()
     settings = get_settings()
     inject_css()
-    _header(settings.deployment_mode)
-    with st.sidebar:
-        system_panel()
-    _config_notice(report)
 
+    from amaris.llm.router import configured_chain, provider_status
+
+    with st.sidebar:
+        _sidebar()
+
+    chain = configured_chain()
+    topbar(settings.deployment_mode, chain, provider_status())
+    for item in report.errors:
+        st.error(item)
+
+    # the hero only makes sense before a run; afterwards the result is the headline
+    showing_result = st.session_state.get("result") is not None or st.session_state.get("error")
+    if not showing_result:
+        hero(chain)
+
+    # a key separate from the widget's own — writing into the widget's key after it is
+    # instantiated is what crashed this page before
+    prefill = st.session_state.pop("prefill_query", "")
     with st.form("research_form"):
-        query = st.text_input(
+        field, action = st.columns([9, 1], gap="small")
+        query = field.text_input(
             "Research question",
-            placeholder="What is the Model Context Protocol?",
+            value=prefill,
+            placeholder="ask a research question…",
             label_visibility="collapsed",
         )
-        submitted = st.form_submit_button("Research", type="primary")
+        submitted = action.form_submit_button("run", type="primary", use_container_width=True)
+    example_queries()
 
     if submitted and query.strip():
         guard = validate_input(query)
         if not guard.ok:
             st.error(guard.reason)
             return
-        query = guard.text
         try:
-            _execute(query.strip(), settings.is_cloud)
+            _execute(guard.text.strip(), settings.is_cloud)
         except (httpx.HTTPError, OSError) as exc:
             # the single most likely local-mode mistake is the api simply not being up
             st.error(
@@ -256,14 +223,16 @@ def main() -> None:
             return
 
     if st.session_state.get("result") is not None or st.session_state.get("error"):
-        run_header(st.session_state.get("events", []), st.session_state.get("session_id", ""))
-        _render_result(
+        results(
             st.session_state.get("result"),
             st.session_state.get("session_id", ""),
             st.session_state.get("error"),
             st.session_state.get("elapsed"),
             st.session_state.get("events", []),
+            report,
         )
+    else:
+        landing()
 
 
 if __name__ == "__main__":

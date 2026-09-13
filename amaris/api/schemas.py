@@ -24,6 +24,9 @@ AGENT_PROGRESS: dict[str, int] = {
 }
 DONE_PROGRESS = 100
 
+# enough of a source to judge whether it was worth citing, without shipping whole pages
+SOURCE_SNIPPET_CHARS = 400
+
 # the supervisor is a router, not work, so it never moves the bar
 _AGENT_MESSAGES: dict[str, str] = {
     "supervisor": "deciding what runs next",
@@ -61,6 +64,15 @@ class RunTrace(BaseModel):
     source_count: int = 0
     critic_feedback: str = ""
     top_issue: str = ""
+    # the planner's tasks and the analyst's synthesis existed only in graph state until now,
+    # so the two agents in the middle of the run had nothing to show for themselves
+    research_plan: list[dict[str, Any]] = Field(default_factory=list)
+    research_strategy: str = ""
+    analysis: str = ""
+    code_outputs: list[dict[str, Any]] = Field(default_factory=list)
+    routing_hint: str = ""
+    quality_score: float = 0.0
+    sources: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ResearchResult(BaseModel):
@@ -142,6 +154,16 @@ def build_progress_event(
     )
 
 
+def _trim_source(item: dict[str, Any]) -> dict[str, Any]:
+    """A source row for the UI. Content is cut because 60 full pages would bloat the payload."""
+    return {
+        "title": item.get("title", ""),
+        "url": item.get("url", ""),
+        "task_id": item.get("task_id", ""),
+        "snippet": str(item.get("content", ""))[:SOURCE_SNIPPET_CHARS],
+    }
+
+
 def result_from_state(state: GraphState) -> ResearchResult:
     """Final state to the shape both the API and the in-process frontend return."""
     # critic and evaluator both emit a "faithfulness", so the eval scores get prefixed
@@ -162,5 +184,12 @@ def result_from_state(state: GraphState) -> ResearchResult:
             source_count=len({s.get("url") for s in state["raw_research"] if s.get("url")}),
             critic_feedback=state["critic_feedback"],
             top_issue=state["top_issue"],
+            research_plan=state["research_plan"],
+            research_strategy=state["research_strategy"],
+            analysis=state["analyzed_data"],
+            code_outputs=state["code_outputs"],
+            routing_hint=state["routing_hint"],
+            quality_score=state["quality_score"],
+            sources=[_trim_source(item) for item in state["raw_research"]],
         ),
     )

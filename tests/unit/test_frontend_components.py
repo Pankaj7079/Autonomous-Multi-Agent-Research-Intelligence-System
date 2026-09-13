@@ -18,6 +18,7 @@ class FakeStreamlit:
     def __init__(self) -> None:
         self.html: list[str] = []
         self.captions: list[str] = []
+        self.codes: list[str] = []
 
     def markdown(self, body: str, **_: Any) -> None:
         self.html.append(body)
@@ -25,9 +26,16 @@ class FakeStreamlit:
     def caption(self, body: str, **_: Any) -> None:
         self.captions.append(body)
 
+    def code(self, body: str, **_: Any) -> None:
+        self.codes.append(str(body))
+
     @contextlib.contextmanager
     def expander(self, label: str, **_: Any):
         self.captions.append(label)
+        yield
+
+    @contextlib.contextmanager
+    def container(self, **_: Any):
         yield
 
     @property
@@ -53,39 +61,79 @@ def test_badge_class_uses_the_critics_threshold_not_a_ui_constant() -> None:
     assert badge_class(WARN_FLOOR - 0.01, 0.72) == "bad"
 
 
-def test_a_repeat_visit_gets_its_own_card(fake: FakeStreamlit) -> None:
-    """Three researcher cards are the visible proof the supervisor re-routed."""
+# ── the execution timeline ────────────────────────────────────────────────
+
+
+def test_a_repeat_visit_gets_its_own_row(fake: FakeStreamlit) -> None:
+    """Two researcher rows are the visible proof the supervisor re-routed."""
     events = [_event("planner"), _event("researcher"), _event("researcher")]
-    components.agent_progress_tracker(events)
+    components.agent_timeline(events)
     assert fake.drawn.count(">researcher<") == 2
 
 
-def test_the_supervisor_never_gets_a_card(fake: FakeStreamlit) -> None:
-    components.agent_progress_tracker([_event("supervisor"), _event("planner")])
+def test_the_supervisor_never_gets_a_row(fake: FakeStreamlit) -> None:
+    components.agent_timeline([_event("supervisor"), _event("planner")])
     assert ">supervisor<" not in fake.drawn
 
 
 def test_the_current_agent_is_active_and_the_rest_are_done(fake: FakeStreamlit) -> None:
-    components.agent_progress_tracker([_event("planner"), _event("researcher")])
+    components.agent_timeline([_event("planner"), _event("researcher")])
     drawn = fake.drawn
-    assert drawn.index("amaris-step done") < drawn.index("amaris-step active")
+    assert drawn.index("tl-row done") < drawn.index("tl-row active")
 
 
-def test_a_finished_run_has_no_active_card(fake: FakeStreamlit) -> None:
+def test_a_finished_run_has_no_active_row(fake: FakeStreamlit) -> None:
     events = [_event("planner"), _event("writer"), _event("", status="done", pct=100)]
-    components.agent_progress_tracker(events)
-    assert "amaris-step active" not in fake.drawn
+    components.agent_timeline(events)
+    assert "tl-row active" not in fake.drawn
 
 
-def test_a_failed_run_marks_the_last_card_failed(fake: FakeStreamlit) -> None:
+def test_a_failed_run_marks_the_last_row_failed(fake: FakeStreamlit) -> None:
     events = [_event("planner"), _event("researcher"), _event("", status="failed")]
-    components.agent_progress_tracker(events)
-    assert "amaris-step failed" in fake.drawn
+    components.agent_timeline(events)
+    assert "tl-row failed" in fake.drawn
 
 
 def test_unvisited_agents_show_as_pending(fake: FakeStreamlit) -> None:
-    components.agent_progress_tracker([_event("planner")])
-    assert fake.drawn.count("amaris-step pending") == len(components.WORKERS) - 1
+    components.agent_timeline([_event("planner")])
+    assert fake.drawn.count("tl-row pending") == len(components.WORKERS) - 1
+
+
+def test_the_timeline_shows_how_long_each_step_took(fake: FakeStreamlit) -> None:
+    """Duration is the number worth showing; cumulative elapsed lives in the event log."""
+    events = [_event("supervisor"), _event("planner"), _event("researcher")]
+    events[0].elapsed_s = 0.4
+    events[1].elapsed_s = 4.1
+    events[2].elapsed_s = 61.8
+    components.agent_timeline(events)
+    assert "3.7s" in fake.drawn, "planner took 4.1 - 0.4"
+    assert "57.7s" in fake.drawn, "researcher took 61.8 - 4.1"
+
+
+# ── the pipeline flow strip ───────────────────────────────────────────────
+
+
+def test_the_flow_marks_the_current_agent_active(fake: FakeStreamlit) -> None:
+    components.pipeline_flow([_event("planner"), _event("researcher")])
+    drawn = fake.drawn
+    assert "node active" in drawn
+    assert "node pending" in drawn
+
+
+def test_the_flow_counts_a_repeat_visit(fake: FakeStreamlit) -> None:
+    """One node cannot show two rows, so a re-route has to show as a multiplier."""
+    events = [_event("researcher"), _event("critic"), _event("researcher")]
+    components.pipeline_flow(events)
+    assert "&times;2" in fake.drawn
+
+
+def test_the_flow_has_no_active_node_once_the_run_is_done(fake: FakeStreamlit) -> None:
+    events = [_event("writer"), _event("", status="done", pct=100)]
+    components.pipeline_flow(events)
+    assert "node active" not in fake.drawn
+
+
+# ── scores ────────────────────────────────────────────────────────────────
 
 
 def test_score_dashboard_draws_the_four_critic_dimensions(fake: FakeStreamlit) -> None:
@@ -97,10 +145,10 @@ def test_score_dashboard_draws_the_four_critic_dimensions(fake: FakeStreamlit) -
     }
     components.score_dashboard(scores)
     drawn = fake.drawn
-    assert drawn.count("amaris-badge") == 4
-    assert "amaris-badge good" in drawn
-    assert "amaris-badge warn" in drawn
-    assert "amaris-badge bad" in drawn
+    assert drawn.count("metric ") == 4
+    assert "metric good" in drawn
+    assert "metric warn" in drawn
+    assert "metric bad" in drawn
 
 
 def test_an_absent_eval_metric_reads_as_not_scored(fake: FakeStreamlit) -> None:
@@ -117,26 +165,42 @@ def test_a_real_eval_zero_is_still_shown_as_zero(fake: FakeStreamlit) -> None:
 
 def test_no_critic_scores_says_so_instead_of_drawing_empty_badges(fake: FakeStreamlit) -> None:
     components.score_dashboard({})
-    assert "amaris-badge" not in fake.drawn
+    assert "metric" not in fake.drawn
     assert fake.captions
+
+
+# ── sources ───────────────────────────────────────────────────────────────
 
 
 def test_citations_keep_the_writers_numbering(fake: FakeStreamlit) -> None:
     """[3] in the report must be [3] in the list, so the index is never recomputed here."""
-    components.citation_list([{"index": 7, "title": "Spec", "url": "https://example.com/spec"}])
+    components.source_list([{"index": 7, "title": "Spec", "url": "https://example.com/spec"}], [])
     assert "[7]" in fake.drawn
     assert 'href="https://example.com/spec"' in fake.drawn
 
 
 def test_citation_titles_are_escaped(fake: FakeStreamlit) -> None:
-    components.citation_list([{"index": 1, "title": "<script>x</script>", "url": ""}])
+    components.source_list([{"index": 1, "title": "<script>x</script>", "url": ""}], [])
     assert "<script>" not in fake.drawn
 
 
-def test_no_citations_renders_a_note_not_an_empty_expander(fake: FakeStreamlit) -> None:
-    components.citation_list([])
+def test_no_citations_renders_a_note_not_an_empty_list(fake: FakeStreamlit) -> None:
+    components.source_list([], [])
     assert fake.drawn == ""
     assert fake.captions == ["no citations"]
+
+
+def test_gathered_but_uncited_sources_are_still_reachable(fake: FakeStreamlit) -> None:
+    """The researcher read 2 pages and the writer cited 1 — hiding the other is a black box."""
+    citations = [{"index": 1, "title": "Used", "url": "https://a.test"}]
+    sources = [
+        {"title": "Used", "url": "https://a.test", "task_id": "t1", "snippet": "kept"},
+        {"title": "Dropped", "url": "https://b.test", "task_id": "t2", "snippet": "unused"},
+    ]
+    components.source_list(citations, sources)
+    assert "Dropped" in fake.drawn
+    assert "b.test" in fake.drawn
+    assert any("not cited (1)" in c for c in fake.captions)
 
 
 # ── the views that stop the run being a black box ─────────────────────────
@@ -169,13 +233,13 @@ def _trace(**overrides):
 
 
 def test_run_stats_surfaces_the_numbers_that_explain_the_run(fake: FakeStreamlit) -> None:
-    components.run_stats(_trace(), ["planner", "researcher"], 84.0)
+    components.run_metrics(_trace(), ["planner", "researcher"], 84.0)
     drawn = fake.drawn
     assert "12" in drawn and "0.80" in drawn and "84s" in drawn
 
 
 def test_run_stats_without_a_trace_draws_nothing(fake: FakeStreamlit) -> None:
-    components.run_stats(None, [], None)
+    components.run_metrics(None, [], None)
     assert fake.drawn == ""
 
 
@@ -202,14 +266,15 @@ def test_a_divergence_from_the_documented_rule_is_flagged(fake: FakeStreamlit) -
         ]
     )
     components.decision_trace(trace)
-    assert "diverged" in fake.drawn
-    assert any("diverged" in c for c in fake.captions)
+    drawn = fake.drawn
+    assert "diverged" in drawn
+    assert "1 call(s) diverged" in drawn, "the heading must say so, not only the row"
 
 
 def test_react_discipline_reports_how_each_task_ended(fake: FakeStreamlit) -> None:
     components.react_discipline(_trace())
     assert "self-stopped" in fake.drawn
-    assert any("1/1 tasks self-stopped" in c for c in fake.captions)
+    assert "1/1 tasks self-terminated" in fake.drawn
 
 
 def test_hitting_the_cap_is_reported_as_such(fake: FakeStreamlit) -> None:
@@ -230,18 +295,78 @@ def test_critic_verdict_is_silent_when_the_critic_said_nothing(fake: FakeStreaml
     assert fake.drawn == ""
 
 
-# ── the dense execution views ─────────────────────────────────────────────
+def test_the_research_plan_is_visible(fake: FakeStreamlit) -> None:
+    """The planner drove the whole run and used to leave no trace on screen at all."""
+    trace = _trace(
+        research_plan=[
+            {"task_id": "t1", "description": "find the spec", "assigned_to": "researcher"}
+        ],
+        research_strategy="breadth first",
+    )
+    components.research_plan(trace)
+    drawn = fake.drawn
+    assert "find the spec" in drawn
+    assert "t1" in drawn
+    assert "breadth first" in drawn
 
 
-def test_the_timeline_shows_how_long_each_step_took(fake: FakeStreamlit) -> None:
-    """Duration is the number worth showing; cumulative elapsed lives in the event log."""
-    events = [_event("supervisor"), _event("planner"), _event("researcher")]
-    events[0].elapsed_s = 0.4
-    events[1].elapsed_s = 4.1
-    events[2].elapsed_s = 61.8
-    components.agent_progress_tracker(events)
-    assert "3.7s" in fake.drawn, "planner took 4.1 - 0.4"
-    assert "57.7s" in fake.drawn, "researcher took 61.8 - 4.1"
+def test_the_research_plan_is_silent_when_the_planner_produced_nothing(
+    fake: FakeStreamlit,
+) -> None:
+    components.research_plan(_trace(research_plan=[]))
+    assert fake.drawn == ""
+
+
+def test_the_analyst_synthesis_is_visible(fake: FakeStreamlit) -> None:
+    """The analyst sits between the sources and the report and was never shown."""
+    components.analysis_view(_trace(analysis="the three findings are ..."))
+    assert "the three findings are ..." in fake.drawn
+
+
+def test_plan_and_analysis_escape_injected_markup(fake: FakeStreamlit) -> None:
+    trace = _trace(research_plan=[{"task_id": "t1", "description": "<script>x</script>"}])
+    components.research_plan(trace)
+    assert "<script>" not in fake.drawn
+
+
+# ── the verdict banner ────────────────────────────────────────────────────
+
+
+def _result(**overrides):
+    from amaris.api.schemas import ResearchResult
+
+    base = {
+        "report": "# body",
+        "citations": [],
+        "scores": {"overall": 0.81},
+        "agent_path": ["planner"],
+        "trace": _trace(),
+    }
+    return ResearchResult(**{**base, **overrides})
+
+
+def test_an_approved_run_reads_as_approved(fake: FakeStreamlit) -> None:
+    components.verdict_banner(_result(), None)
+    drawn = fake.drawn
+    assert "verdict good" in drawn
+    assert "approved" in drawn.lower()
+
+
+def test_a_run_below_the_floor_does_not_claim_approval(fake: FakeStreamlit) -> None:
+    """0.55 is under the 0.72 approve floor — calling that approved would be a lie."""
+    components.verdict_banner(_result(scores={"overall": 0.55}), None)
+    assert "verdict warn" in fake.drawn
+    assert "below the approval floor" in fake.drawn.lower()
+
+
+def test_a_failed_run_shows_the_error(fake: FakeStreamlit) -> None:
+    components.verdict_banner(None, "provider chain exhausted")
+    drawn = fake.drawn
+    assert "verdict bad" in drawn
+    assert "provider chain exhausted" in drawn
+
+
+# ── run header, log and raw ───────────────────────────────────────────────
 
 
 def test_the_run_header_reports_stage_progress_and_elapsed(fake: FakeStreamlit) -> None:
@@ -253,6 +378,11 @@ def test_the_run_header_reports_stage_progress_and_elapsed(fake: FakeStreamlit) 
     assert "researcher" in drawn
     assert "45%" in drawn
     assert "31.2s" in drawn
+
+
+def test_the_run_header_marks_an_unfinished_run_live(fake: FakeStreamlit) -> None:
+    components.run_header([_event("researcher")], "abc")
+    assert "live" in fake.drawn
 
 
 def test_the_run_header_is_silent_before_the_first_event(fake: FakeStreamlit) -> None:
@@ -269,7 +399,7 @@ def test_the_event_log_keeps_every_transition_in_order(fake: FakeStreamlit) -> N
 
 def test_the_event_log_marks_a_failure_differently(fake: FakeStreamlit) -> None:
     components.event_log([_event("writer", status="failed")])
-    assert "amaris-log" in fake.drawn
+    assert 'class="log"' in fake.drawn
     assert 'class="err"' in fake.drawn
 
 
@@ -280,6 +410,9 @@ def test_the_raw_inspector_exposes_result_and_events(fake: FakeStreamlit) -> Non
     components.raw_inspector(None, [_event("planner")])
     assert payloads and set(payloads[0]) == {"result", "events"}
     assert payloads[0]["events"][0]["agent"] == "planner"
+
+
+# ── provider status ───────────────────────────────────────────────────────
 
 
 def test_the_sidebar_flags_a_parked_provider(fake: FakeStreamlit, monkeypatch) -> None:
@@ -293,7 +426,7 @@ def test_the_sidebar_flags_a_parked_provider(fake: FakeStreamlit, monkeypatch) -
     fake.warning = warnings.append
     fake.error = lambda body: warnings.append(f"ERROR {body}")
 
-    components.system_panel()
+    components.provider_strip()
 
     assert "3600s" in fake.drawn
     assert any("only glm usable" in w for w in warnings)
@@ -308,5 +441,5 @@ def test_the_sidebar_refuses_a_fully_parked_chain(fake: FakeStreamlit, monkeypat
     fake.error = errors.append
     fake.warning = lambda body: None
 
-    components.system_panel()
+    components.provider_strip()
     assert any("every provider is rate limited" in e for e in errors)
