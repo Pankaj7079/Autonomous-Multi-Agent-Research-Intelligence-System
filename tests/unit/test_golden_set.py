@@ -12,8 +12,27 @@ from amaris.evaluation.golden_set import load_golden_set
 def test_the_real_golden_set_loads_and_covers_every_category() -> None:
     queries = load_golden_set()
     categories = {q.category for q in queries}
-    assert categories == {"factual", "comparative", "multi_hop", "recent_events", "ambiguous"}
+    assert categories == {
+        "factual",
+        "comparative",
+        "multi_hop",
+        "recent_events",
+        "ambiguous",
+        "clarification",
+        "direct",
+    }
     assert len(queries) >= 10
+
+
+def test_the_cheap_categories_expect_fewer_agents_not_more() -> None:
+    """A question that needs no research must not be scored as though it did."""
+    cheap = [q for q in load_golden_set() if q.category in ("clarification", "direct")]
+    assert cheap, "the golden set must cover questions that do not deserve a full run"
+    for query in cheap:
+        assert "analyst" not in query.expected_agents_involved, query.id
+        if query.category == "clarification":
+            assert query.expected_min_sources == 0
+            assert "researcher" not in query.expected_agents_involved, query.id
 
 
 def test_the_real_golden_set_has_deliberately_hard_queries() -> None:

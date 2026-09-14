@@ -12,6 +12,8 @@ RoutingHint = str
 NEED_MORE_RESEARCH = "need_more_research"
 FIX_WRITING = "fix_writing"
 APPROVE = "approve"
+# the report answers a different question than the one asked — re-plan, don't re-search
+WRONG_TOPIC = "wrong_topic"
 
 # named individually so trajectory_eval.py can re-derive supervisor routing without
 # hard-coding agent name strings a second time
@@ -21,9 +23,17 @@ ANALYST = "analyst"
 WRITER = "writer"
 CRITIC = "critic"
 
+# nodes, not routing choices — the supervisor is never asked to pick either of these
+TRIAGE = "triage"
+CLARIFY = "clarify"
+
 # every value state["next_agent"] is allowed to take
 AGENTS = (PLANNER, RESEARCHER, ANALYST, WRITER, CRITIC)
 FINISH = "FINISH"
+
+# how deeply a query is worth researching; triage picks one, budgets key off it
+DEPTHS = ("direct", "brief", "standard", "deep")
+DEFAULT_DEPTH = "standard"
 
 
 class GraphState(TypedDict):
@@ -32,6 +42,14 @@ class GraphState(TypedDict):
     session_id: str
     original_query: str
     started_at: str
+
+    # triage — set once, before anything is spent, and read by every agent downstream
+    query_depth: str
+    answerable: bool
+    clarifying_question: str
+    report_sections: list[str]
+    word_target: int
+    triage_reason: str
 
     # planner
     research_plan: list[dict[str, Any]]
@@ -81,6 +99,12 @@ def new_state(query: str, session_id: str | None = None) -> GraphState:
         session_id=session_id or new_session_id(),
         original_query=query.strip(),
         started_at=datetime.now(UTC).isoformat(timespec="seconds"),
+        query_depth=DEFAULT_DEPTH,
+        answerable=True,
+        clarifying_question="",
+        report_sections=[],
+        word_target=0,
+        triage_reason="",
         research_plan=[],
         research_strategy="",
         raw_research=[],

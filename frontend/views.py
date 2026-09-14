@@ -42,10 +42,11 @@ def landing() -> None:
     """The empty state. It sells the system and explains it, rather than sitting blank."""
     stat_strip()
 
-    label("the seven agents")
+    label("the agents")
     describe(
-        "Each agent owns a decision rather than a step. Nothing runs on a fixed order: the "
-        "supervisor picks the next agent from the state of the run, every time."
+        "Each agent owns a decision rather than a step. Triage decides how much the question "
+        "is worth spending before anything is spent, and the supervisor decides the rest — but "
+        "only where the state of the run leaves the next step genuinely open."
     )
     agent_grid()
 
@@ -53,7 +54,8 @@ def landing() -> None:
     with left:
         label("routing", "example run")
         describe(
-            "Every line below is a separate LLM call. A fixed chain cannot produce the two marked ones."
+            "Forced hops are graph edges and cost nothing. Only the gate lines are model calls, "
+            "and a fixed chain cannot produce the two marked ones."
         )
         route_demo()
     with right:
@@ -63,10 +65,11 @@ def landing() -> None:
         )
         kv_rows(
             {
+                "query_depth": "triage sets every budget from it",
                 "next_agent": "supervisor writes, graph routes",
                 "research_quality": "researcher self-scores 0-1",
-                "routing_hint": "critic: approve / fix / research",
-                "decision_log": "every hop, for scoring later",
+                "routing_hint": "approve / fix / research / re-plan",
+                "decision_log": "every hop, and what it cost",
                 "react_stats": "did it self-stop or hit the cap",
             },
             boxed=True,
@@ -153,8 +156,8 @@ def _sources_tab(result: ResearchResult) -> None:
 def _evaluation_tab(result: ResearchResult) -> None:
     label("critic scores", "layer 3")
     describe(
-        "The critic reads the draft and scores four dimensions. These gate approval and are "
-        "what the supervisor reads when deciding whether to revise."
+        "The critic reads the draft against the sources and scores five dimensions. answer_fit "
+        "caps the overall score, so a polished report about the wrong subject cannot pass."
     )
     score_dashboard(result.scores)
     label("ragas evaluation", "layers 1-2")

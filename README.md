@@ -116,7 +116,7 @@ see:
 | 2 · report | report vs sources and vs query | RAGAS `faithfulness`, `answer_relevancy` |
 | 3 · trajectory | the routing path itself | custom, **no LLM calls** |
 
-Layer 3 is the one no off-the-shelf tool can provide: `routing_accuracy`
+Layer 3 is the one no off-the-shelf tool can provide: `routing_agreement`
 re-derives the documented supervisor rule table and checks the LLM actually
 followed it, and `react_discipline` measures how often the researcher stopped
 because it was satisfied rather than because it hit the iteration cap. Because

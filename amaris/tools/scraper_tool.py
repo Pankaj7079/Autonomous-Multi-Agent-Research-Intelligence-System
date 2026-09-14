@@ -16,6 +16,10 @@ THIN_SNIPPET_CHARS = 300
 
 _warned_missing = False
 
+# each scrape launches a headless browser, so more than two at once is where tail latency
+# came from when four research tasks all decided to fetch at the same moment
+_BROWSERS = asyncio.Semaphore(2)
+
 
 def _extract_markdown(result: Any) -> str:
     """crawl4ai moved markdown between attributes across versions, so try both shapes."""
@@ -39,7 +43,8 @@ async def scrape_url(url: str, timeout_s: int = SCRAPE_TIMEOUT, max_chars: int =
     started = time.perf_counter()
 
     try:
-        text = await asyncio.wait_for(_crawl(url), timeout=timeout_s)
+        async with _BROWSERS:
+            text = await asyncio.wait_for(_crawl(url), timeout=timeout_s)
     except ImportError:
         # optional `scraping` extra — the researcher falls back to search snippets
         if not _warned_missing:

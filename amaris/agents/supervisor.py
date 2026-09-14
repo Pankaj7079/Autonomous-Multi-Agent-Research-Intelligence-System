@@ -1,4 +1,10 @@
-"""THE AGENTIC CORE. An LLM reads state and picks the next agent. No routing lives elsewhere."""
+"""THE AGENTIC CORE. Two gates where the next step is genuinely undecided — and nowhere else.
+
+Forced hops are graph edges now. This agent is asked only the two questions state cannot
+answer on its own: is the research good enough to write from, and what does a reviewed draft
+need next. Even at those gates it short-circuits without a model call when the answer is
+already determined, so LLM spend tracks real uncertainty rather than step count.
+"""
 
 from __future__ import annotations
 
@@ -6,16 +12,17 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from amaris.agents.base_agent import BaseAgent
+from amaris.agents.triage import budget_for
 from amaris.graph.state import (
-    AGENTS,
     ANALYST,
-    CRITIC,
+    APPROVE,
     FINISH,
     FIX_WRITING,
     NEED_MORE_RESEARCH,
     PLANNER,
     RESEARCHER,
     WRITER,
+    WRONG_TOPIC,
     source_count,
 )
 from amaris.observability.logging import logger
@@ -23,94 +30,115 @@ from amaris.observability.logging import logger
 if TYPE_CHECKING:
     from amaris.graph.state import GraphState
 
-ALLOWED = (*AGENTS, FINISH)
+RESEARCH_GATE = "research_gate"
+REVIEW_GATE = "review_gate"
 
-PROMPT = """You are the orchestrator of AMARIS, an agentic research system.
-Your only job: decide which agent runs next. Output one word, nothing else.
+# what each gate is allowed to answer — the LLM never picks from the full agent list
+GATE_CHOICES: dict[str, tuple[str, ...]] = {
+    RESEARCH_GATE: (RESEARCHER, ANALYST),
+    REVIEW_GATE: (WRITER, RESEARCHER, PLANNER, FINISH),
+}
 
-Available agents:
-  planner    — breaks the query into concrete research tasks
-  researcher — searches the web and recalls memory
-  analyst    — synthesizes research into structured insight
-  writer     — writes the final cited report
-  critic     — reviews report quality
-  FINISH     — triggers evaluation and ends the run
+# one more researcher visit than this and we are paying for searches that keep returning
+# the same pages; the gate stops being a judgement call and becomes a stop
+MAX_RESEARCH_VISITS = 3
+MAX_PLAN_VISITS = 2
+# below this a run has essentially nothing to write from, whatever the self-assessment said
+MIN_USABLE_SOURCES = 3
 
-Current state:
-  query: {original_query}
-  plan exists: {plan_exists}
-  research quality (0-1, 0=none): {research_quality}
-  sources found: {source_count}
-  analysis complete: {analysis_done}
-  draft exists: {draft_exists}
-  quality score (0=unscored): {quality_score}
-  revisions so far: {revision_count}
-  critic routing hint: {routing_hint}
-  error: {error}
+RESEARCH_GATE_PROMPT = """You decide whether a research pass is good enough to write from.
 
-Decision rules, highest priority first:
-  1. error is set                                    → FINISH
-  2. revision_count >= {max_revisions}               → FINISH
-  3. no plan yet                                     → planner
-  4. routing_hint == "need_more_research"            → researcher
-  5. routing_hint == "fix_writing"                   → writer
-  6. research_quality < {quality_floor} OR source_count < 4     → researcher
-  7. research ok, analysis_done false                → analyst
-  8. analysis done, no draft                         → writer
-  9. draft exists, quality_score == 0                → critic
- 10. quality_score >= {approve_floor}                → FINISH
- 11. quality_score < {approve_floor} and revisions < {max_revisions} → writer
+The question: {original_query}
+Depth this question was triaged as: {query_depth} (budget: {budget_sources} sources)
 
-Output exactly one of: planner researcher analyst writer critic FINISH"""
+What the researcher came back with:
+  sources kept after relevance filtering: {kept}
+  sources discarded as off-topic: {discarded}
+  researcher's own quality self-rating: {research_quality} (floor is {quality_floor})
+  research passes so far: {research_visits} of {max_visits}
+
+The best sources it found, by title:
+{top_titles}
+
+Judge whether these sources can actually answer the question that was asked.
+Many sources about a neighbouring topic are worse than a few about this one.
+Another pass is only worth its cost if there is a specific gap it would close.
+
+Answer with one word:
+  researcher — go back and search again
+  analyst    — enough to work with, move on
+
+Output exactly one of: researcher analyst"""
+
+REVIEW_GATE_PROMPT = """A draft has been reviewed. Decide what it needs next.
+
+The question: {original_query}
+Reviewer scores: {scores}
+Overall: {quality_score} (approval floor is {approve_floor})
+Does it answer the question that was asked: {answer_fit}
+The single biggest problem: {top_issue}
+Revisions so far: {revision_count} of {max_revisions}
+
+Pick the cheapest fix that addresses the real problem:
+  writer     — the facts are there, the writing is the problem
+  researcher — the writing is fine, the evidence is missing
+  planner    — it answers a different question than the one asked, so the
+               research tasks themselves were wrong
+  FINISH     — good enough, or nothing further can realistically be fixed
+
+Output exactly one of: writer researcher planner FINISH"""
 
 
-def expected_route(
-    plan_exists: bool,
-    research_quality: float,
-    src_count: int,
-    analysis_done: bool,
-    draft_exists: bool,
+def expected_after_research(
+    src_count: int, research_quality: float, research_visits: int, quality_floor: float
+) -> tuple[str, str]:
+    """Weak invariant for the research gate — what a reasonable decision looks like here.
+
+    Not a rule table the prompt mirrors. It exists so the decision_log can record whether the
+    model agreed with the obvious reading, which trajectory_eval reports as routing_agreement.
+    Disagreement is informative, not a failure: judging that 20 off-topic sources are worse
+    than 5 good ones is exactly the call we want a model making.
+    """
+    if src_count == 0:
+        return RESEARCHER, "no_sources"
+    if research_visits >= MAX_RESEARCH_VISITS:
+        return ANALYST, "research_visits_spent"
+    if research_quality < quality_floor:
+        return RESEARCHER, "below_quality_floor"
+    return ANALYST, "research_sufficient"
+
+
+def expected_after_review(
+    routing_hint: str,
     quality_score: float,
     revision_count: int,
-    routing_hint: str,
-    quality_floor: float,
     approve_floor: float,
     max_revisions: int,
 ) -> tuple[str, str]:
-    """Rules 3-11 from PROMPT, re-derived in plain code.
-
-    Single source of truth for "what should the supervisor have picked here" — used to build
-    the decision_log's reasoning field, and reused as-is by trajectory_eval.py's routing_accuracy
-    so the two never drift apart. Rules 1-2 are terminal_reason's job: the LLM never sees that
-    state, so they are not "routing decisions" this function needs to reproduce.
-    """
-    if not plan_exists:
-        return PLANNER, "rule_3_no_plan"
+    """Weak invariant for the review gate. Same contract as expected_after_research."""
+    if revision_count >= max_revisions:
+        return FINISH, "revision_cap"
+    if routing_hint == WRONG_TOPIC:
+        return PLANNER, "hint_wrong_topic"
+    if quality_score >= approve_floor or routing_hint == APPROVE:
+        return FINISH, "approved"
     if routing_hint == NEED_MORE_RESEARCH:
-        return RESEARCHER, "rule_4_hint_need_more_research"
+        return RESEARCHER, "hint_need_more_research"
     if routing_hint == FIX_WRITING:
-        return WRITER, "rule_5_hint_fix_writing"
-    if research_quality < quality_floor or src_count < 4:
-        return RESEARCHER, "rule_6_thin_research"
-    if not analysis_done:
-        return ANALYST, "rule_7_no_analysis"
-    if not draft_exists:
-        return WRITER, "rule_8_no_draft"
-    if quality_score == 0:
-        return CRITIC, "rule_9_unscored"
-    if quality_score >= approve_floor:
-        return FINISH, "rule_10_approved"
-    if quality_score < approve_floor and revision_count < max_revisions:
-        return WRITER, "rule_11_needs_revision"
-    # unreachable given rule 2's cap runs first in _terminal_reason, but a pure function returns
-    return FINISH, "rule_fallthrough"
+        return WRITER, "hint_fix_writing"
+    return WRITER, "below_approve_floor"
 
 
 class SupervisorAgent(BaseAgent):
-    """Writes next_agent. Every agent returns here, so this is the only place routing happens."""
+    """Writes next_agent at the two branch points. Everything else in the graph is a fixed edge."""
 
     name = "supervisor"
     task_type = "supervisor"
+
+    def _gate(self, state: GraphState) -> str:
+        """Which question is being asked — derived from who just ran, not from a flag."""
+        last = state["agent_path"][-1] if state["agent_path"] else ""
+        return REVIEW_GATE if last == "critic" else RESEARCH_GATE
 
     def _terminal_reason(self, state: GraphState) -> str | None:
         """Conditions where code decides, not the LLM — an LLM must not guard a billing loop."""
@@ -122,8 +150,43 @@ class SupervisorAgent(BaseAgent):
             return "step_cap"
         return None
 
+    def _proceed_target(self, state: GraphState) -> str:
+        """Where 'enough research' leads. Shallow queries skip synthesis and go straight to writing."""
+        return ANALYST if budget_for(state["query_depth"]).analysis else WRITER
+
+    def _settled(
+        self, state: GraphState, gate: str, snapshot: dict[str, Any]
+    ) -> tuple[str, str] | None:
+        """The answer when state already determines it, so no model call is made. None means decide.
+
+        This is the whole point of the rewrite: a clean run reaches FINISH without the supervisor
+        ever calling a model, and the calls that do happen are on genuinely contested state.
+        """
+        if gate == RESEARCH_GATE:
+            if snapshot["source_count"] == 0 and snapshot["research_visits"] < MAX_RESEARCH_VISITS:
+                return RESEARCHER, "settled_no_sources"
+            if snapshot["research_visits"] >= MAX_RESEARCH_VISITS:
+                return self._proceed_target(state), "settled_visits_spent"
+            # both signals agree there is enough — there is nothing left to weigh
+            if (
+                snapshot["research_quality"] >= self.settings.research_quality_threshold
+                and snapshot["source_count"] >= MIN_USABLE_SOURCES
+            ):
+                return self._proceed_target(state), "settled_quality_met"
+            return None
+
+        if (
+            snapshot["routing_hint"] == APPROVE
+            and snapshot["quality_score"] >= self.settings.quality_approve_threshold
+        ):
+            return FINISH, "settled_approved"
+        if snapshot["routing_hint"] == WRONG_TOPIC and snapshot["plan_visits"] >= MAX_PLAN_VISITS:
+            # re-planning twice and still answering the wrong question will not improve on a third
+            return FINISH, "settled_replan_spent"
+        return None
+
     def _snapshot(self, state: GraphState) -> dict[str, Any]:
-        """Raw values behind every prompt field and every routing rule — built once, used twice."""
+        """Raw values behind every prompt field and every logged decision — built once, used twice."""
         return {
             "plan_exists": bool(state["research_plan"]),
             "research_quality": round(state["research_quality"], 2),
@@ -133,22 +196,53 @@ class SupervisorAgent(BaseAgent):
             "quality_score": round(state["quality_score"], 2),
             "revision_count": state["revision_count"],
             "routing_hint": state["routing_hint"] or "none",
+            "research_visits": state["agent_path"].count(RESEARCHER),
+            "plan_visits": state["agent_path"].count(PLANNER),
+            "query_depth": state["query_depth"],
             "error": state.get("error") or "none",
         }
 
-    def _build_prompt(self, state: GraphState, snapshot: dict[str, Any]) -> str:
-        return PROMPT.format(
+    def _build_prompt(self, state: GraphState, gate: str, snapshot: dict[str, Any]) -> str:
+        if gate == RESEARCH_GATE:
+            budget = budget_for(state["query_depth"])
+            kept = min(snapshot["source_count"], budget.max_sources)
+            return RESEARCH_GATE_PROMPT.format(
+                original_query=state["original_query"],
+                query_depth=snapshot["query_depth"],
+                budget_sources=budget.max_sources,
+                kept=kept,
+                discarded=max(0, len(state["raw_research"]) - kept),
+                research_quality=snapshot["research_quality"],
+                quality_floor=self.settings.research_quality_threshold,
+                research_visits=snapshot["research_visits"],
+                max_visits=MAX_RESEARCH_VISITS,
+                top_titles=self._top_titles(state),
+            )
+        return REVIEW_GATE_PROMPT.format(
             original_query=state["original_query"],
-            max_revisions=self.settings.max_revisions,
-            quality_floor=self.settings.research_quality_threshold,
+            scores=", ".join(f"{k} {v:.2f}" for k, v in state["critic_scores"].items()) or "none",
+            quality_score=snapshot["quality_score"],
             approve_floor=self.settings.quality_approve_threshold,
-            **snapshot,
+            answer_fit=state["critic_scores"].get("answer_fit", "not scored"),
+            top_issue=state["top_issue"] or "none stated",
+            revision_count=snapshot["revision_count"],
+            max_revisions=self.settings.max_revisions,
         )
+
+    def _top_titles(self, state: GraphState) -> str:
+        """Titles are scraped text, so they are shown as data the gate reads, never as instructions."""
+        from amaris.safety.injection import wrap_untrusted
+
+        titles = [str(item.get("title", ""))[:90] for item in state["raw_research"][:6]]
+        if not titles:
+            return "nothing was found"
+        return wrap_untrusted("\n".join(f"- {t}" for t in titles if t))
 
     def _log_decision(
         self,
         state: GraphState,
         *,
+        gate: str,
         to_agent: str,
         llm_decided: bool,
         snapshot: dict[str, Any],
@@ -161,87 +255,114 @@ class SupervisorAgent(BaseAgent):
             "timestamp": datetime.now(UTC).isoformat(timespec="seconds"),
             "from_agent": state["agent_path"][-1] if state["agent_path"] else "START",
             "to_agent": to_agent,
+            "gate": gate,
             "llm_decided": llm_decided,
             "expected_agent": expected_agent,
             "matched_rule": matched_rule,
-            # the supervisor prompt outputs one word, nothing else — there is no real llm
-            # reasoning to log, so this states which documented rule justifies the expected pick
-            "reasoning": f"{matched_rule} → expected {expected_agent}",
+            "reasoning": (
+                f"{gate}: chose {to_agent}"
+                + ("" if llm_decided else f" without a model call ({matched_rule})")
+            ),
             **snapshot,
         }
 
-    async def _run(self, state: GraphState) -> dict[str, Any]:
-        reason = self._terminal_reason(state)
-        if reason:
-            snapshot = self._snapshot(state)
-            entry = self._log_decision(
-                state,
-                to_agent=FINISH,
-                llm_decided=False,
-                snapshot=snapshot,
-                matched_rule=reason,
-                expected_agent=FINISH,
+    def _expected(self, state: GraphState, gate: str, snapshot: dict[str, Any]) -> tuple[str, str]:
+        if gate == RESEARCH_GATE:
+            agent, rule = expected_after_research(
+                snapshot["source_count"],
+                snapshot["research_quality"],
+                snapshot["research_visits"],
+                self.settings.research_quality_threshold,
             )
-            logger.bind(next_agent=FINISH, reason=reason).info("supervisor.route")
-            return {
-                "next_agent": FINISH,
-                "agent_path": [*state["agent_path"], FINISH],
-                "decision_log": [*state["decision_log"], entry],
-            }
-
-        snapshot = self._snapshot(state)
-        raw = await self._invoke(self._build_prompt(state, snapshot))
-        chosen = self._match(raw)
-        expected_agent, matched_rule = expected_route(
-            snapshot["plan_exists"],
-            snapshot["research_quality"],
-            snapshot["source_count"],
-            snapshot["analysis_done"],
-            snapshot["draft_exists"],
+            return (self._proceed_target(state) if agent == ANALYST else agent), rule
+        return expected_after_review(
+            snapshot["routing_hint"],
             snapshot["quality_score"],
             snapshot["revision_count"],
-            snapshot["routing_hint"],
-            self.settings.research_quality_threshold,
             self.settings.quality_approve_threshold,
             self.settings.max_revisions,
         )
-        entry = self._log_decision(
+
+    async def _run(self, state: GraphState) -> dict[str, Any]:
+        snapshot = self._snapshot(state)
+        gate = self._gate(state)
+
+        reason = self._terminal_reason(state)
+        if reason:
+            return self._decide(state, gate, snapshot, FINISH, reason, llm_decided=False)
+
+        settled = self._settled(state, gate, snapshot)
+        if settled:
+            chosen, rule = settled
+            return self._decide(state, gate, snapshot, chosen, rule, llm_decided=False)
+
+        raw = await self._invoke(self._build_prompt(state, gate, snapshot))
+        chosen = self._match(raw, gate)
+        if chosen == ANALYST:
+            chosen = self._proceed_target(state)
+        expected_agent, matched_rule = self._expected(state, gate, snapshot)
+        return self._decide(
             state,
-            to_agent=chosen,
+            gate,
+            snapshot,
+            chosen,
+            matched_rule,
             llm_decided=True,
-            snapshot=snapshot,
-            matched_rule=matched_rule,
             expected_agent=expected_agent,
+            raw=raw,
         )
 
+    def _decide(
+        self,
+        state: GraphState,
+        gate: str,
+        snapshot: dict[str, Any],
+        chosen: str,
+        rule: str,
+        *,
+        llm_decided: bool,
+        expected_agent: str | None = None,
+        raw: str = "",
+    ) -> dict[str, Any]:
+        """Build the state update for one routing decision, logged the same way either way."""
+        entry = self._log_decision(
+            state,
+            gate=gate,
+            to_agent=chosen,
+            llm_decided=llm_decided,
+            snapshot=snapshot,
+            matched_rule=rule,
+            expected_agent=expected_agent or chosen,
+        )
         logger.bind(
+            gate=gate,
             next_agent=chosen,
-            expected=expected_agent if expected_agent != chosen else None,
+            llm_decided=llm_decided,
+            rule=rule,
+            expected=expected_agent if expected_agent and expected_agent != chosen else None,
             quality=snapshot["research_quality"],
             score=snapshot["quality_score"],
-            revisions=snapshot["revision_count"],
             hint=snapshot["routing_hint"],
             sources=snapshot["source_count"],
-            raw=raw[:40] if chosen != raw else None,
+            raw=raw[:40] if raw and chosen not in raw else None,
         ).info("supervisor.route")
-
         return {
             "next_agent": chosen,
-            "agent_path": [*state["agent_path"], chosen],
             "decision_log": [*state["decision_log"], entry],
         }
 
-    def _match(self, raw: str) -> str:
-        """Map a reply onto the allowed set. Anything unrecognised ends the run safely."""
+    def _match(self, raw: str, gate: str) -> str:
+        """Map a reply onto what this gate may answer. Anything unrecognised ends the run safely."""
+        allowed = GATE_CHOICES[gate]
         cleaned = raw.strip().strip(".\"'`*").lower()
-        for candidate in ALLOWED:
+        for candidate in allowed:
             if cleaned == candidate.lower():
                 return candidate
 
         # models sometimes answer in a sentence, so fall back to the first name mentioned
-        for candidate in ALLOWED:
+        for candidate in allowed:
             if candidate.lower() in cleaned:
                 return candidate
 
-        logger.bind(raw=raw[:120]).warning("supervisor.unparsable")
-        return FINISH
+        logger.bind(raw=raw[:120], gate=gate).warning("supervisor.unparsable")
+        return FINISH if gate == REVIEW_GATE else allowed[-1]

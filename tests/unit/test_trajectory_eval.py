@@ -2,9 +2,19 @@
 
 from __future__ import annotations
 
-from amaris.agents.supervisor import expected_route
+from amaris.agents.supervisor import expected_after_research, expected_after_review
 from amaris.evaluation.trajectory_eval import TrajectoryEvaluator
-from amaris.graph.state import ANALYST, CRITIC, FINISH, PLANNER, RESEARCHER, WRITER, new_state
+from amaris.graph.state import (
+    ANALYST,
+    APPROVE,
+    FINISH,
+    NEED_MORE_RESEARCH,
+    PLANNER,
+    RESEARCHER,
+    WRITER,
+    WRONG_TOPIC,
+    new_state,
+)
 
 
 def entry(
@@ -14,7 +24,8 @@ def entry(
     *,
     llm_decided: bool = True,
     expected_agent: str | None = None,
-    matched_rule: str = "rule_x",
+    matched_rule: str = "some_rule",
+    gate: str = "research_gate",
     research_quality: float = 0.7,
     source_count: int = 8,
     quality_score: float = 0.0,
@@ -32,7 +43,8 @@ def entry(
         "llm_decided": llm_decided,
         "expected_agent": expected_agent if expected_agent is not None else to_agent,
         "matched_rule": matched_rule,
-        "reasoning": f"{matched_rule} → expected {expected_agent or to_agent}",
+        "gate": gate,
+        "reasoning": f"{gate}: chose {to_agent}",
         "plan_exists": plan_exists,
         "research_quality": research_quality,
         "source_count": source_count,
@@ -45,79 +57,80 @@ def entry(
     }
 
 
-# ── expected_route (the rule table, re-derived) ─────────────────────────────
+# ── the routing invariants (weak expectations, not a rule table) ─────────────
 
 
-def test_expected_route_covers_the_documented_priority_order() -> None:
-    assert expected_route(False, 0.0, 0, False, False, 0.0, 0, "none", 0.6, 0.72, 2) == (
-        PLANNER,
-        "rule_3_no_plan",
-    )
-    assert (
-        expected_route(True, 0.0, 0, False, False, 0.0, 0, "need_more_research", 0.6, 0.72, 2)[0]
-        == RESEARCHER
-    )
-    assert (
-        expected_route(True, 0.0, 0, False, False, 0.0, 0, "fix_writing", 0.6, 0.72, 2)[0] == WRITER
-    )
-    assert expected_route(True, 0.3, 2, False, False, 0.0, 0, "none", 0.6, 0.72, 2)[0] == RESEARCHER
-    assert expected_route(True, 0.8, 8, False, False, 0.0, 0, "none", 0.6, 0.72, 2)[0] == ANALYST
-    assert expected_route(True, 0.8, 8, True, False, 0.0, 0, "none", 0.6, 0.72, 2)[0] == WRITER
-    assert expected_route(True, 0.8, 8, True, True, 0.0, 0, "none", 0.6, 0.72, 2)[0] == CRITIC
-    assert expected_route(True, 0.8, 8, True, True, 0.9, 0, "none", 0.6, 0.72, 2)[0] == FINISH
-    assert expected_route(True, 0.8, 8, True, True, 0.4, 0, "none", 0.6, 0.72, 2)[0] == WRITER
+def test_the_research_invariant_reads_the_obvious_cases() -> None:
+    assert expected_after_research(0, 0.0, 0, 0.6) == (RESEARCHER, "no_sources")
+    assert expected_after_research(5, 0.3, 1, 0.6)[0] == RESEARCHER
+    assert expected_after_research(8, 0.8, 1, 0.6)[0] == ANALYST
+    # a gate that can always ask for more research is an unbounded bill
+    assert expected_after_research(2, 0.1, 3, 0.6)[0] == ANALYST
 
 
-def test_hint_rules_outrank_the_thin_research_rule() -> None:
-    """Rule 4/5 sit above rule 6 — a hint must win even when research also looks thin."""
-    agent, rule = expected_route(True, 0.1, 1, False, False, 0.0, 0, "fix_writing", 0.6, 0.72, 2)
-    assert (agent, rule) == (WRITER, "rule_5_hint_fix_writing")
+def test_the_review_invariant_reads_the_obvious_cases() -> None:
+    assert expected_after_review(APPROVE, 0.9, 0, 0.72, 2)[0] == FINISH
+    assert expected_after_review(NEED_MORE_RESEARCH, 0.4, 0, 0.72, 2)[0] == RESEARCHER
+    assert expected_after_review(WRONG_TOPIC, 0.3, 0, 0.72, 2)[0] == PLANNER
+    assert expected_after_review("none", 0.4, 0, 0.72, 2)[0] == WRITER
 
 
-# ── routing_accuracy ─────────────────────────────────────────────────────────
+def test_the_revision_cap_outranks_every_other_reading() -> None:
+    """Nothing may keep a run going once it has spent its revisions."""
+    agent, rule = expected_after_review(NEED_MORE_RESEARCH, 0.1, 2, 0.72, 2)
+    assert (agent, rule) == (FINISH, "revision_cap")
 
 
-async def test_routing_accuracy_is_perfect_when_every_choice_matches_the_rule() -> None:
+# ── routing_agreement and routing_economy ────────────────────────────────────
+
+
+async def test_agreement_is_perfect_when_every_choice_matches_the_invariant() -> None:
     state = new_state("q")
     state["decision_log"] = [
-        entry(1, "START", PLANNER, matched_rule="rule_3_no_plan"),
-        entry(2, PLANNER, RESEARCHER, matched_rule="rule_6_thin_research"),
+        entry(1, RESEARCHER, ANALYST, matched_rule="research_sufficient"),
+        entry(2, "critic", FINISH, matched_rule="approved", gate="review_gate"),
     ]
     results = await TrajectoryEvaluator().evaluate(state)
-    routing = next(r for r in results if r.metric == "routing_accuracy")
+    routing = next(r for r in results if r.metric == "routing_agreement")
     assert routing.score == 1.0
-    assert routing.passed
 
 
-async def test_routing_accuracy_catches_a_supervisor_that_ignores_the_rules() -> None:
-    """This is the metric that would have caught a supervisor routing on vibes."""
-    state = new_state("q")
-    state["decision_log"] = [
-        # LLM chose analyst when the rule said researcher — a real mismatch
-        entry(1, "START", ANALYST, expected_agent=RESEARCHER, matched_rule="rule_6_thin_research"),
-    ]
-    results = await TrajectoryEvaluator().evaluate(state)
-    routing = next(r for r in results if r.metric == "routing_accuracy")
-    assert routing.score == 0.0
-    assert "rule_6_thin_research" in routing.detail
-
-
-async def test_routing_accuracy_ignores_code_decided_terminal_steps() -> None:
-    """Rules 1-2 are never a routing decision the LLM made — scoring them would be meaningless."""
+async def test_agreement_reports_where_the_model_took_a_different_view() -> None:
+    """Disagreement is informative — judging 20 off-topic sources thin SHOULD differ from a count."""
     state = new_state("q")
     state["decision_log"] = [
         entry(
-            1,
-            "writer",
-            FINISH,
-            llm_decided=False,
-            expected_agent=FINISH,
-            matched_rule="rule_1_error",
+            1, RESEARCHER, ANALYST, expected_agent=RESEARCHER, matched_rule="below_quality_floor"
         ),
     ]
     results = await TrajectoryEvaluator().evaluate(state)
-    routing = next(r for r in results if r.metric == "routing_accuracy")
-    assert routing.detail == "no LLM-decided steps to check"
+    routing = next(r for r in results if r.metric == "routing_agreement")
+    assert routing.score == 0.0
+    assert "below_quality_floor" in routing.detail
+    # not a failing grade: the gate is allowed to disagree with the naive reading
+    assert routing.passed
+
+
+async def test_agreement_ignores_decisions_no_model_made() -> None:
+    state = new_state("q")
+    state["decision_log"] = [
+        entry(1, WRITER, FINISH, llm_decided=False, matched_rule="error_set", gate="review_gate"),
+    ]
+    results = await TrajectoryEvaluator().evaluate(state)
+    routing = next(r for r in results if r.metric == "routing_agreement")
+    assert "no model call was needed" in routing.detail
+
+
+async def test_economy_measures_how_many_hops_cost_nothing() -> None:
+    """The headline claim after the rewrite: spend tracks uncertainty, not step count."""
+    state = new_state("q")
+    state["decision_log"] = [
+        entry(1, RESEARCHER, ANALYST, llm_decided=False, matched_rule="settled_quality_met"),
+        entry(2, "critic", WRITER, llm_decided=True, gate="review_gate"),
+    ]
+    results = await TrajectoryEvaluator().evaluate(state)
+    economy = next(r for r in results if r.metric == "routing_economy")
+    assert economy.score == 0.5
 
 
 async def test_no_decision_log_returns_a_zero_result_not_a_crash() -> None:

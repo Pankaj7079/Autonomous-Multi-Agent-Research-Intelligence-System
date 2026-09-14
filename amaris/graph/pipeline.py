@@ -12,11 +12,13 @@ from amaris.config.settings import get_settings
 from amaris.graph.edges import EVALUATOR, register_edges
 from amaris.graph.nodes import (
     analyst_node,
+    clarify_node,
     critic_node,
     evaluator_node,
     planner_node,
     researcher_node,
     supervisor_node,
+    triage_node,
     writer_node,
 )
 from amaris.graph.state import GraphState, new_state
@@ -29,6 +31,8 @@ if TYPE_CHECKING:
     from langgraph.graph.state import CompiledStateGraph
 
 NODES = {
+    "triage": triage_node,
+    "clarify": clarify_node,
     "supervisor": supervisor_node,
     "planner": planner_node,
     "researcher": researcher_node,
@@ -48,8 +52,8 @@ def build_graph() -> StateGraph:
     for name, node in NODES.items():
         workflow.add_node(name, node)
 
-    # the supervisor runs first and after every agent, so it is the only entry point
-    workflow.add_edge(START, "supervisor")
+    # triage runs first: nothing else should be spent before we know what the question needs
+    workflow.add_edge(START, "triage")
     register_edges(workflow)
     return workflow
 

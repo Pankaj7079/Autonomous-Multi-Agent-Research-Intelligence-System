@@ -7,16 +7,19 @@ from typing import Any
 import pytest
 
 from amaris.graph import nodes as nodes_module
-from amaris.graph.edges import EVALUATOR, ROUTE_MAP, route_from_supervisor
-from amaris.graph.nodes import evaluator_node, researcher_node, supervisor_node
+from amaris.graph.edges import EVALUATOR, ROUTE_MAP, route_from_supervisor, route_from_triage
+from amaris.graph.nodes import clarify_node, evaluator_node, researcher_node, supervisor_node
 from amaris.graph.pipeline import build_graph, run_config
-from amaris.graph.state import AGENTS, FINISH, new_state
+from amaris.graph.state import AGENTS, CLARIFY, FINISH, PLANNER, TRIAGE, new_state
+
+# critic is not here on purpose: writer → critic is a fixed edge, never a routing choice
+ROUTABLE = tuple(a for a in ROUTE_MAP if a != FINISH)
 
 # ── edges ─────────────────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("agent", AGENTS)
-def test_every_agent_is_routable(agent: str) -> None:
+@pytest.mark.parametrize("agent", ROUTABLE)
+def test_every_gate_target_is_routable(agent: str) -> None:
     state = new_state("q")
     state["next_agent"] = agent
     assert route_from_supervisor(state) == agent
@@ -44,15 +47,51 @@ def test_empty_next_agent_falls_back_to_finish() -> None:
 def test_graph_has_every_node() -> None:
     compiled = build_graph().compile()
     names = {n for n in compiled.get_graph().nodes if not n.startswith("__")}
-    assert names == {*AGENTS, "supervisor", EVALUATOR}
+    assert names == {*AGENTS, TRIAGE, CLARIFY, "supervisor", EVALUATOR}
 
 
-def test_every_agent_returns_to_the_supervisor() -> None:
-    """No agent knows what runs next — that is what makes this agentic."""
+def test_triage_runs_before_anything_is_spent() -> None:
+    """Nothing may run before the question has been sized."""
     compiled = build_graph().compile()
     edges = {(e.source, e.target) for e in compiled.get_graph().edges}
-    for agent in AGENTS:
-        assert (agent, "supervisor") in edges
+    assert ("__start__", TRIAGE) in edges
+
+
+def test_forced_hops_are_edges_not_routing_calls() -> None:
+    """A plan always needs researching; asking a model to confirm that cost a call per hop."""
+    compiled = build_graph().compile()
+    edges = {(e.source, e.target) for e in compiled.get_graph().edges}
+    assert ("planner", "researcher") in edges
+    assert ("analyst", "writer") in edges
+    assert ("writer", "critic") in edges
+    assert ("planner", "supervisor") not in edges
+
+
+def test_the_supervisor_sits_on_exactly_the_two_real_gates() -> None:
+    """Research sufficiency and post-review direction are the only undetermined branches."""
+    compiled = build_graph().compile()
+    into_supervisor = {e.source for e in compiled.get_graph().edges if e.target == "supervisor"}
+    assert into_supervisor == {"researcher", "critic"}
+
+
+def test_an_unanswerable_query_never_reaches_an_agent() -> None:
+    state = new_state("tell about today weather")
+    state["answerable"] = False
+    assert route_from_triage(state) == CLARIFY
+
+    state["answerable"] = True
+    assert route_from_triage(state) == PLANNER
+
+
+async def test_clarify_asks_a_question_and_spends_nothing() -> None:
+    """The clarify node makes no LLM call at all — that is what makes it ~3s."""
+    state = new_state("tell about today weather")
+    state["clarifying_question"] = "Which city should I look up the weather for?"
+    update = await clarify_node(state)
+
+    assert "Which city" in update["final_report"]
+    assert update["next_agent"] == FINISH
+    assert update["agent_path"] == ["clarify"]
 
 
 def test_recursion_limit_has_headroom_for_the_step_cap() -> None:

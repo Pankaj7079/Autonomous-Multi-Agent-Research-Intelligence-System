@@ -268,7 +268,8 @@ def test_a_divergence_from_the_documented_rule_is_flagged(fake: FakeStreamlit) -
     components.decision_trace(trace)
     drawn = fake.drawn
     assert "diverged" in drawn
-    assert "1 call(s) diverged" in drawn, "the heading must say so, not only the row"
+    assert "1 diverged" in drawn, "the heading must say so, not only the row"
+    assert "0 of 1 were settled by state" in drawn
 
 
 def test_react_discipline_reports_how_each_task_ended(fake: FakeStreamlit) -> None:

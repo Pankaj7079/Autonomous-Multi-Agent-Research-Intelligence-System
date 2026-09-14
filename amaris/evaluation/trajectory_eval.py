@@ -11,7 +11,7 @@ from __future__ import annotations
 from itertools import pairwise
 from typing import TYPE_CHECKING
 
-from amaris.agents.supervisor import expected_route
+from amaris.agents.supervisor import expected_after_research, expected_after_review
 from amaris.config.settings import get_settings
 from amaris.evaluation.base import EvalResult
 from amaris.graph.state import source_count
@@ -23,23 +23,41 @@ if TYPE_CHECKING:
 LAYER = "trajectory"
 
 
-def _routing_accuracy(decision_log: list[dict]) -> EvalResult:
-    """Re-derives the documented rule for each LLM-made decision; catches routing on vibes."""
+def _routing_agreement(decision_log: list[dict]) -> EvalResult:
+    """How often the gate agreed with the obvious reading of the state.
+
+    Deliberately NOT called accuracy: the invariants in supervisor.py are a weak expectation,
+    not a rule the prompt mirrors, and a gate judging that twenty off-topic sources are worse
+    than five good ones SHOULD disagree with a source count. Low agreement is a prompt to go
+    read the mismatches, not a failing grade.
+    """
     llm_steps = [entry for entry in decision_log if entry.get("llm_decided")]
     if not llm_steps:
-        return EvalResult(LAYER, "routing_accuracy", 0.0, False, "no LLM-decided steps to check")
+        detail = "every routing decision was settled by state — no model call was needed"
+        return EvalResult(LAYER, "routing_agreement", 1.0, True, detail)
 
     matches = sum(1 for entry in llm_steps if entry["to_agent"] == entry["expected_agent"])
     score = round(matches / len(llm_steps), 4)
     mismatches = [
-        f"step {e['step']}: chose {e['to_agent']}, rule said {e['expected_agent']} ({e['matched_rule']})"
+        f"step {e['step']}: chose {e['to_agent']}, invariant expected {e['expected_agent']} ({e['matched_rule']})"
         for e in llm_steps
         if e["to_agent"] != e["expected_agent"]
     ]
-    detail = f"{matches}/{len(llm_steps)} decisions matched the documented rule"
+    detail = f"{matches}/{len(llm_steps)} model decisions matched the invariant"
     if mismatches:
         detail += "; " + "; ".join(mismatches[:3])
-    return EvalResult(LAYER, "routing_accuracy", score, score >= 0.8, detail)
+    return EvalResult(LAYER, "routing_agreement", score, True, detail)
+
+
+def _routing_economy(decision_log: list[dict]) -> EvalResult:
+    """What share of routing decisions cost nothing because state already determined them."""
+    if not decision_log:
+        return EvalResult(LAYER, "routing_economy", 0.0, False, "no routing decisions were made")
+
+    settled = sum(1 for entry in decision_log if not entry.get("llm_decided"))
+    score = round(settled / len(decision_log), 4)
+    detail = f"{settled}/{len(decision_log)} routing decisions needed no model call"
+    return EvalResult(LAYER, "routing_economy", score, score >= 0.5, detail)
 
 
 def _research_convergence(decision_log: list[dict]) -> EvalResult:
@@ -138,11 +156,12 @@ class TrajectoryEvaluator:
         if not decision_log:
             logger.bind(session=state["session_id"]).debug("trajectory_eval.no_decision_log")
             return [
-                EvalResult(LAYER, "routing_accuracy", 0.0, False, "no decision_log on this run")
+                EvalResult(LAYER, "routing_agreement", 0.0, False, "no decision_log on this run")
             ]
 
         results = [
-            _routing_accuracy(decision_log),
+            _routing_agreement(decision_log),
+            _routing_economy(decision_log),
             _research_convergence(decision_log),
             _loop_efficiency(decision_log),
             _termination_quality(state),
@@ -152,5 +171,5 @@ class TrajectoryEvaluator:
         return results
 
 
-# re-exported so a caller can sanity-check the supervisor's own rule table independently
-__all__ = ["TrajectoryEvaluator", "expected_route"]
+# re-exported so a caller can check the supervisor's routing invariants independently
+__all__ = ["TrajectoryEvaluator", "expected_after_research", "expected_after_review"]

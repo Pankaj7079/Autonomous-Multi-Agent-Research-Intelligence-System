@@ -2,42 +2,52 @@
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Any
 
 from amaris.agents.base_agent import BaseAgent
+from amaris.agents.triage import budget_for
 from amaris.observability.logging import logger
+from amaris.tools.relevance import select_for_prompt
 
 if TYPE_CHECKING:
     from amaris.graph.state import GraphState
 
 SOURCE_CHARS = 500
-MAX_SOURCES_IN_PROMPT = 12
 
-PROMPT = """You are a senior research report writer. Use only the provided research
-and analysis. Every factual claim gets an inline citation [1], [2].
+# gpt-oss reaches for fullwidth brackets when citing, which no [n] matcher downstream finds
+_CITATION_MARKER = re.compile(r"[【\[]\s*(\d+)\s*[】\]]")
+
+PROMPT = """You are a senior research writer. Use only the provided research and analysis.
+
+Open with this heading and nothing before it:
+
+## Answer
+
+Under it, answer the question in 1-3 sentences. Plainly, in the first breath, the
+way you would answer a colleague who asked. No throat-clearing, no restating the
+question, no "this report examines". If the research does not actually answer the
+question, say so in that first line and say what is missing — do not fill the space
+with adjacent facts.
+
+Then, and only then, use exactly these headings:
+{sections}
 
 Rules:
-  - no claim without a source
-  - flag uncertainty explicitly
+  - about {word_target} words in total, and shorter is better than padded
+  - every factual claim gets an inline citation [1], [2]
+  - no claim without a source; flag uncertainty explicitly
   - active voice: "researchers found" not "it was found that"
-  - 800-1200 words
-
-Structure, exactly these headings:
-  ## Executive Summary        (3-5 sentences: what was asked, found, implied)
-  ## Background & Context
-  ## Key Findings             (4-6 numbered: claim [n] + evidence + confidence)
-  ## Analysis & Insights
-  ## Conclusion & Recommendations
-  ## References               ([1] Title — URL)
+  - end with ## References listing only the sources you actually cited
 
 {revision_block}
 
-Query: {query}
+Question: {query}
 
 Analysis:
 {analysis}
 
-Numbered sources — cite these exact numbers:
+Numbered sources — cite only the numbers that support a claim you make:
 {sources}"""
 
 REVISION_BLOCK = """This is revision {n}. The critic said:
@@ -53,18 +63,22 @@ class WriterAgent(BaseAgent):
     task_type = "writing"
 
     async def _run(self, state: GraphState) -> dict[str, Any]:
-        citations = self._build_citations(state["raw_research"])
+        selected = self._select(state)
+        citations = self._build_citations(selected)
         prompt = PROMPT.format(
+            sections=self._sections(state),
+            word_target=state["word_target"] or budget_for(state["query_depth"]).word_target,
             revision_block=self._revision_block(state),
             query=state["original_query"],
-            analysis=state["analyzed_data"] or "no analysis was produced",
-            sources=self._format_sources(state["raw_research"], citations),
+            analysis=state["analyzed_data"] or "no separate analysis was produced",
+            sources=self._format_sources(selected, citations),
         )
 
-        report = await self._invoke(prompt)
+        report = _CITATION_MARKER.sub(lambda m: f"[{m.group(1)}]", await self._invoke(prompt))
         logger.bind(
             chars=len(report),
             citations=len(citations),
+            depth=state["query_depth"],
             revision=state["revision_count"],
         ).info("writer.done")
 
@@ -74,6 +88,22 @@ class WriterAgent(BaseAgent):
             # consume the hint: leaving it set makes the supervisor route here forever
             "routing_hint": "",
         }
+
+    def _select(self, state: GraphState) -> list[dict[str, Any]]:
+        return select_for_prompt(
+            state["original_query"],
+            state["raw_research"],
+            self.settings.max_sources_in_prompt,
+            self.settings.relevance_floor,
+        )
+
+    def _sections(self, state: GraphState) -> str:
+        """Headings after ## Answer. A short question does not get a six-part academic template."""
+        sections = state["report_sections"] or list(budget_for(state["query_depth"]).sections)
+        rest = [s for s in sections if s.strip().lower() != "answer"]
+        if not rest:
+            return "  (no further headings — the answer above is the whole report)"
+        return "\n".join(f"  ## {s}" for s in rest)
 
     def _revision_block(self, state: GraphState) -> str:
         """Only present on a rewrite, so the first draft isn't told to fix nothing."""
@@ -93,7 +123,7 @@ class WriterAgent(BaseAgent):
                 "title": item.get("title", "") or item.get("url", ""),
                 "url": item.get("url", ""),
             }
-            for index, item in enumerate(sources[:MAX_SOURCES_IN_PROMPT], start=1)
+            for index, item in enumerate(sources, start=1)
         ]
 
     def _format_sources(

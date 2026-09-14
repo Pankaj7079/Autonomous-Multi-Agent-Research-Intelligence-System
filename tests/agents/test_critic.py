@@ -7,7 +7,7 @@ import json
 import pytest
 
 from amaris.agents.critic import CriticAgent
-from amaris.graph.state import APPROVE, FIX_WRITING, NEED_MORE_RESEARCH
+from amaris.graph.state import APPROVE, FIX_WRITING, NEED_MORE_RESEARCH, WRONG_TOPIC
 from tests.helpers import ScriptedLLM, patch_invoke
 
 
@@ -16,12 +16,14 @@ def verdict(
     completeness: float = 0.8,
     coherence: float = 0.8,
     citation_quality: float = 0.8,
+    answer_fit: float = 0.8,
     overall: float = 0.8,
     hint: str = APPROVE,
 ) -> str:
     return json.dumps(
         {
             "scores": {
+                "answer_fit": answer_fit,
                 "faithfulness": faithfulness,
                 "completeness": completeness,
                 "coherence": coherence,
@@ -68,12 +70,45 @@ async def test_revision_count_increments(monkeypatch: pytest.MonkeyPatch, drafte
     assert update["revision_count"] == 2
 
 
-async def test_passing_score_overrides_a_fix_writing_hint(
+async def test_a_stated_hint_survives_a_passing_score(
     monkeypatch: pytest.MonkeyPatch, drafted_state
 ) -> None:
-    """Found live: overall 0.92 plus fix_writing looped the writer 10 times until the step cap."""
+    """The inverse of the old rule: a high self-reported score no longer silences the reviewer.
+
+    Forcing approve whenever the score passed is exactly why a 0.91 report about the wrong
+    topic could not be contested. The revision cap, not a score override, bounds the loop.
+    """
     update = await critique(monkeypatch, drafted_state, verdict(overall=0.92, hint=FIX_WRITING))
-    assert update["routing_hint"] == APPROVE
+    assert update["routing_hint"] == FIX_WRITING
+
+
+async def test_overall_cannot_exceed_answer_fit(
+    monkeypatch: pytest.MonkeyPatch, drafted_state
+) -> None:
+    """The 92-second weather run scored 0.91 while admitting it never found the weather."""
+    update = await critique(monkeypatch, drafted_state, verdict(answer_fit=0.2, overall=0.91))
+    assert update["quality_score"] == 0.2
+
+
+async def test_approving_a_report_that_answers_another_question_becomes_wrong_topic(
+    monkeypatch: pytest.MonkeyPatch, drafted_state
+) -> None:
+    """The one contradiction still overridden — and it routes to the planner, not the writer."""
+    update = await critique(
+        monkeypatch, drafted_state, verdict(answer_fit=0.1, overall=0.9, hint=APPROVE)
+    )
+    assert update["routing_hint"] == WRONG_TOPIC
+
+
+async def test_the_critic_is_shown_the_sources_it_is_judging(
+    monkeypatch: pytest.MonkeyPatch, drafted_state
+) -> None:
+    """Faithfulness was unverifiable before: the critic never saw the evidence."""
+    agent = CriticAgent()
+    llm = patch_invoke(monkeypatch, agent, ScriptedLLM(verdict()))
+    await agent.run(drafted_state)
+
+    assert "https://example.com/1" in llm.prompts[0]
 
 
 async def test_unknown_hint_is_derived_from_the_scores(
@@ -104,6 +139,7 @@ async def test_missing_overall_is_recomputed_from_the_dimensions(
     reply = json.dumps(
         {
             "scores": {
+                "answer_fit": 0.8,
                 "faithfulness": 0.6,
                 "completeness": 0.8,
                 "coherence": 0.8,
@@ -113,7 +149,7 @@ async def test_missing_overall_is_recomputed_from_the_dimensions(
         }
     )
     update = await critique(monkeypatch, drafted_state, reply)
-    assert update["quality_score"] == 0.7
+    assert update["quality_score"] == 0.72
 
 
 @pytest.mark.parametrize("bad", ["1.9", "-3", "null", '"high"'])
@@ -121,7 +157,10 @@ async def test_out_of_range_scores_are_clamped(
     monkeypatch: pytest.MonkeyPatch, drafted_state, bad: str
 ) -> None:
     """A score above 1.0 would let a bad report pass the approve threshold."""
-    reply = f'{{"scores": {{"faithfulness": {bad}}}, "overall": {bad}, "routing_hint": "approve"}}'
+    reply = (
+        f'{{"scores": {{"faithfulness": {bad}, "answer_fit": {bad}}}, '
+        f'"overall": {bad}, "routing_hint": "approve"}}'
+    )
     update = await critique(monkeypatch, drafted_state, reply)
     assert 0.0 <= update["quality_score"] <= 1.0
     assert 0.0 <= update["critic_scores"]["faithfulness"] <= 1.0

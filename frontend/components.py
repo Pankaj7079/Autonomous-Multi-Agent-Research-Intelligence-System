@@ -16,10 +16,14 @@ if TYPE_CHECKING:
     from amaris.api.schemas import ProgressEvent, ResearchResult, RunTrace
 
 # the supervisor routes rather than produces, so it gets no lane in the worker flow
-WORKERS = ("planner", "researcher", "analyst", "writer", "critic", "evaluator")
+WORKERS = ("triage", "planner", "researcher", "analyst", "writer", "critic", "evaluator")
+# an unanswerable question takes this lane instead and never touches an agent
+CLARIFY_LANE = ("triage", "clarify")
 TERMINAL = ("done", "failed")
 
 FLOW_TAGS = {
+    "triage": "TRI",
+    "clarify": "ASK",
     "planner": "PLN",
     "researcher": "RSH",
     "analyst": "ANL",
@@ -30,25 +34,28 @@ FLOW_TAGS = {
 
 # what each agent DECIDES is the interesting column — a list of duties would not show autonomy
 AGENT_ROWS: tuple[tuple[str, str, str, str], ...] = (
-    ("SUP", "supervisor", "agentic core", "which agent runs next, re-decided at every step"),
-    ("PLN", "planner", "decomposition", "how to split the question into 3-5 research tasks"),
+    ("TRI", "triage", "budget setter", "how much work the question is worth, before any is spent"),
+    ("SUP", "supervisor", "agentic core", "the two calls state cannot settle on its own"),
+    ("PLN", "planner", "decomposition", "how few tasks the question can be answered with"),
     ("RSH", "researcher", "ReAct loop", "when it has gathered enough — the graph never stops it"),
     ("ANL", "analyst", "synthesis", "whether the question needs real computation"),
     ("WRT", "writer", "drafting", "what to cite and how the report is structured"),
-    ("CRT", "critic", "review + routing", "approve, rewrite, or send it back for more research"),
+    ("CRT", "critic", "review + routing", "approve, rewrite, re-research, or re-plan"),
     ("EVL", "evaluator", "scoring", "nothing — it scores the finished run after the fact"),
 )
 
-# a real routing transcript, the feedback edge included, because that edge is the whole claim
+# a real transcript. the point is no longer that everything is routed, but that routing is
+# paid for only where state leaves the answer open
 ROUTE_DEMO: tuple[tuple[str, str, str, bool], ...] = (
-    ("supervisor", "no plan yet", "planner", False),
-    ("supervisor", "no research yet", "researcher", False),
-    ("supervisor", "research_quality 0.41, thin", "researcher", True),
-    ("supervisor", "research_quality 0.78, enough", "analyst", False),
-    ("supervisor", "analysis done", "writer", False),
-    ("supervisor", "draft exists", "critic", False),
-    ("critic", "routing_hint = need_more_research", "researcher", True),
-    ("supervisor", "quality_score 0.81, approved", "FINISH", False),
+    ("triage", "no location given", "clarify", False),
+    ("triage", "one settled fact, depth=direct", "planner", False),
+    ("edge", "a plan always needs researching", "researcher", False),
+    ("gate 1", "quality 0.41 with 20 off-topic hits", "researcher", True),
+    ("gate 1", "quality 0.78, sources on topic", "analyst", False),
+    ("edge", "analysis always needs writing up", "writer", False),
+    ("edge", "a draft always needs reviewing", "critic", False),
+    ("gate 2", "answer_fit 0.2 — wrong question", "planner", True),
+    ("gate 2", "quality 0.81, critic approves", "FINISH", False),
 )
 
 EXAMPLE_QUERIES = (
@@ -94,7 +101,7 @@ def topbar(mode: str, chain: list[str], cooling: dict[str, float]) -> None:
 
 
 def agent_grid() -> None:
-    """The seven agents as cards. What each one DECIDES is the line that shows autonomy."""
+    """The agents as cards. What each one DECIDES is the line that shows autonomy."""
     cards = []
     for index, (tag, name, role, decides) in enumerate(AGENT_ROWS):
         core = " core" if name == "supervisor" else ""
@@ -117,9 +124,10 @@ def hero(chain: list[str]) -> None:
         f'<div class="eyebrow"><span class="pip"></span>{html.escape(live)} · $0 / month</div>'
         # a div, not an h1 — streamlit styles headings itself and wins the specificity fight
         '<div class="h1">Research that shows<br/>its own reasoning.</div>'
-        '<p class="lede">Ask a question and seven agents plan it, search the web, analyse what '
-        "they find, write a cited report and review it — while a <b>supervisor LLM decides "
-        "which agent runs next at every single step</b>. Every decision it makes is on screen.</p>"
+        '<p class="lede">Ask a question and it is triaged first, then planned, searched, '
+        "analysed, written up with citations and reviewed. A <b>supervisor LLM is spent only "
+        "where state leaves the next step genuinely open</b> — and every one of those calls, "
+        "and every one it skipped, is on screen.</p>"
         "</div>",
         unsafe_allow_html=True,
     )
@@ -128,8 +136,8 @@ def hero(chain: list[str]) -> None:
 def stat_strip() -> None:
     """Four numbers that frame the system before a run exists to describe it."""
     cells = [
-        ("7", "autonomous agents"),
-        ("4", "provider fallback chain"),
+        ("8", "autonomous agents"),
+        ("4", "depth budgets"),
         ("3", "evaluation layers"),
         ("$0", "monthly cost"),
     ]
@@ -178,8 +186,12 @@ def pipeline_flow(events: list[ProgressEvent]) -> None:
         counts[event.agent] = counts.get(event.agent, 0) + 1
     current = next((e.agent for e in reversed(events) if e.agent and e.agent != "supervisor"), "")
 
+    # a clarification run never enters the worker lane, so showing six pending boxes would
+    # read as a failed run rather than a question asked
+    lane = CLARIFY_LANE if "clarify" in counts else WORKERS
+
     nodes = []
-    for index, name in enumerate(WORKERS):
+    for index, name in enumerate(lane):
         if index:
             nodes.append('<span class="sep">&rsaquo;</span>')
         if name == current and not finished:
@@ -294,6 +306,16 @@ def verdict_banner(result: ResearchResult | None, error: str | None) -> None:
         )
         return
     if result is None or result.trace is None:
+        return
+
+    if result.awaiting_clarification:
+        st.markdown(
+            '<div class="verdict warn"><span class="ic">&#63;</span>'
+            "<div><b>the question needs one more detail</b>"
+            "<span class='sub'>triage stopped the run before anything was spent — "
+            "answer above and ask again</span></div></div>",
+            unsafe_allow_html=True,
+        )
         return
 
     floor = get_settings().quality_approve_threshold
@@ -430,15 +452,16 @@ def decision_trace(trace: RunTrace | None) -> None:
     if trace is None or not trace.decisions:
         return
     diverged = sum(1 for d in trace.decisions if d.get("to_agent") != d.get("expected_agent"))
+    settled = sum(1 for d in trace.decisions if not d.get("llm_decided"))
     label("routing decisions", f"{len(trace.decisions)}")
     describe(
-        "The supervisor is an LLM choosing the next agent at every step. 'rule' rows are the "
-        "deterministic guards for errors and caps; 'LLM' rows are its own judgement. "
+        f"{settled} of {len(trace.decisions)} were settled by state and cost no model call; "
+        "the rest were genuine judgement calls at one of the two gates. "
         + (
-            f"{diverged} call(s) diverged from the documented rule — that is the system "
+            f"{diverged} diverged from the naive reading of the state — that is the system "
             "reasoning, not a bug."
             if diverged
-            else "No call diverged from the rule table on this run."
+            else "None diverged from the naive reading of the state on this run."
         )
     )
     st.markdown(

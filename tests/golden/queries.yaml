@@ -1,7 +1,10 @@
 # AMARIS golden set — run by amaris.evaluation.harness against the full live pipeline.
-# 14 queries, 5 categories. An eval set where everything passes measures nothing, so five of
+# 18 queries, 7 categories. An eval set where everything passes measures nothing, so five of
 # these (r1, r2, a1, a2, a3) are deliberately hard: recent/fast-moving facts or genuinely
 # unresolvable questions, where a mediocre score is the CORRECT outcome, not a bug.
+#
+# The clarification and direct categories check the opposite failure: spending a full research
+# run on a question that did not need one. Both expect FEWER agents, not more.
 
 - id: f1
   query: "What is the Model Context Protocol (MCP)?"
@@ -114,3 +117,35 @@
   expected_agents_involved: [planner, researcher, analyst, writer, critic]
   should_require_revision: false
   notes: "deliberately hard — almost no scope at all; tests whether the planner narrows it into concrete tasks or produces a shallow plan"
+
+- id: x1
+  query: "tell about today weather"
+  category: clarification
+  expected_min_sources: 0
+  expected_agents_involved: [triage, clarify]
+  should_require_revision: false
+  notes: "the 92-second run this whole rewrite came from — no location, so no amount of searching can answer it. Must ask a question back and never reach the researcher."
+
+- id: x2
+  query: "Is it worth it?"
+  category: clarification
+  expected_min_sources: 0
+  expected_agents_involved: [triage, clarify]
+  should_require_revision: false
+  notes: "no subject at all — tests that triage catches a missing parameter, not just a missing location"
+
+- id: d1
+  query: "Who created the Python programming language?"
+  category: direct
+  expected_min_sources: 1
+  expected_agents_involved: [triage, planner, researcher, writer, critic]
+  should_require_revision: false
+  notes: "one settled fact — must triage as direct, skip the analyst entirely, and answer in a couple of sentences rather than a six-section report"
+
+- id: d2
+  query: "What does the acronym MCP stand for?"
+  category: direct
+  expected_min_sources: 1
+  expected_agents_involved: [triage, planner, researcher, writer, critic]
+  should_require_revision: false
+  notes: "a definition, not a research question — the point is that it costs one task and one search"

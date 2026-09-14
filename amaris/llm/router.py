@@ -18,7 +18,10 @@ if TYPE_CHECKING:
 
 # which model size a task needs: the researcher makes many short calls, the rest reason
 _TASK_TIER: dict[str, str] = {
-    "supervisor": "reasoning",
+    # routing and triage are short structured decisions, so the 120b model buys nothing
+    # but latency — it was ~4s per hop for a one-word answer
+    "supervisor": "fast",
+    "triage": "fast",
     "planning": "reasoning",
     "analysis": "reasoning",
     "writing": "reasoning",
@@ -32,6 +35,7 @@ _TASK_TIER: dict[str, str] = {
 # routing must be stable across runs, prose can breathe
 _TASK_TEMPERATURE: dict[str, float] = {
     "supervisor": 0.0,
+    "triage": 0.0,
     "critique": 0.1,
     "research": 0.2,
     "react": 0.2,
@@ -75,6 +79,8 @@ _RETRYABLE_MARKERS = (
     # gpt-oss emits a native tool call from a tool-shaped name in the react prompt and groq
     # 400s it. json mode does not actually prevent it, so hop instead of losing the step.
     "tool_use_failed",
+    # same shape: gpt-oss returns an empty generation and groq rejects it as invalid json
+    "json_validate_failed",
 )
 
 

@@ -7,28 +7,40 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from amaris.agents.base_agent import BaseAgent
-from amaris.graph.state import APPROVE, FIX_WRITING, NEED_MORE_RESEARCH
+from amaris.graph.state import APPROVE, FIX_WRITING, NEED_MORE_RESEARCH, WRONG_TOPIC
 from amaris.observability.logging import logger
+from amaris.tools.relevance import select_for_prompt
 
 if TYPE_CHECKING:
     from amaris.graph.state import GraphState
 
-DIMENSIONS = ("faithfulness", "completeness", "coherence", "citation_quality")
-VALID_HINTS = (NEED_MORE_RESEARCH, FIX_WRITING, APPROVE)
+# answer_fit is the only dimension that can fail a report for being about the wrong thing —
+# the other three are satisfied by a polished essay on a neighbouring topic
+DIMENSIONS = ("answer_fit", "faithfulness", "completeness", "coherence", "citation_quality")
+VALID_HINTS = (NEED_MORE_RESEARCH, FIX_WRITING, WRONG_TOPIC, APPROVE)
 REPORT_CHARS = 6000
+SOURCE_CHARS = 300
+# below this the report is not a weaker answer to the question, it is an answer to another one
+ANSWER_FIT_FLOOR = 0.5
 
 PROMPT = """You are a rigorous quality reviewer. Score 0.0-1.0 on each dimension:
 
-faithfulness      1.0 every claim cited and supported · 0.0 many invented claims
-completeness      1.0 fully answers the query · 0.0 barely addresses it
+answer_fit        1.0 answers the exact question asked · 0.0 answers a different
+                  question. Judge this first and judge it strictly. A well-written
+                  report about a related subject scores LOW here, however good it
+                  looks. If the report itself admits the asked-for information is
+                  unknown or unavailable, answer_fit cannot exceed 0.3.
+faithfulness      1.0 every claim supported by the sources below · 0.0 many invented
+completeness      1.0 covers what the question needs · 0.0 barely addresses it
 coherence         1.0 logical and clear · 0.0 disorganized
 citation_quality  1.0 all cited, sources relevant · 0.0 missing or wrong
 
 Then pick exactly one routing_hint:
-  "need_more_research" — faithfulness < 0.65 because claims lack sources.
-                          The problem is missing data, not bad writing.
-  "fix_writing"        — completeness or coherence is the main issue.
-  "approve"            — overall >= {approve_floor}, or nothing further can be fixed.
+  "wrong_topic"        — answer_fit is low. The research tasks themselves were
+                          aimed at the wrong thing; rewriting cannot fix it.
+  "need_more_research" — right topic, but claims lack supporting sources.
+  "fix_writing"        — the material is right, the writing is the problem.
+  "approve"            — good enough, or nothing further can realistically be fixed.
 
 Be specific. Not "needs improvement" but:
 "Section 2 states a 40% failure rate but no provided source contains that
@@ -36,17 +48,18 @@ figure — the researcher needs supporting data before writing can fix this."
 
 Output JSON:
 {{
-  "scores": {{"faithfulness":0.0,"completeness":0.0,
+  "scores": {{"answer_fit":0.0,"faithfulness":0.0,"completeness":0.0,
              "coherence":0.0,"citation_quality":0.0}},
   "overall": 0.0,
   "feedback": "specific and actionable",
   "top_issue": "the single most important fix",
-  "routing_hint": "need_more_research|fix_writing|approve"
+  "routing_hint": "wrong_topic|need_more_research|fix_writing|approve"
 }}
 
-Query: {query}
+Question: {query}
 
-Sources available to the writer: {source_count}
+The sources the writer was given:
+{sources}
 
 Report:
 {report}"""
@@ -72,9 +85,8 @@ class CriticAgent(BaseAgent):
 
     async def _run(self, state: GraphState) -> dict[str, Any]:
         prompt = PROMPT.format(
-            approve_floor=self.settings.quality_approve_threshold,
             query=state["original_query"],
-            source_count=len(state["raw_research"]),
+            sources=self._format_sources(state),
             report=state["draft_report"][:REPORT_CHARS] or "no report was produced",
         )
         payload = await self._invoke_structured(prompt, CriticOutput)
@@ -100,34 +112,60 @@ class CriticAgent(BaseAgent):
             "revision_count": state["revision_count"] + 1,
         }
 
+    def _format_sources(self, state: GraphState) -> str:
+        """The critic could not previously see the evidence, so faithfulness was unverifiable."""
+        from amaris.safety.injection import wrap_untrusted
+
+        selected = select_for_prompt(
+            state["original_query"],
+            state["raw_research"],
+            self.settings.max_sources_in_prompt,
+            self.settings.relevance_floor,
+        )
+        if not selected:
+            return "no sources were gathered — any specific claim in the report is unsupported"
+        blocks = "\n\n".join(
+            f"[{index}] {item.get('title', '')} — {item.get('url', '')}\n"
+            f"{item.get('content', '')[:SOURCE_CHARS]}"
+            for index, item in enumerate(selected, start=1)
+        )
+        return wrap_untrusted(blocks)
+
     def _scores(self, raw: Any) -> dict[str, float]:
         values = raw if isinstance(raw, dict) else {}
         return {name: self._clamp(values.get(name)) for name in DIMENSIONS}
 
     def _overall(self, raw: Any, scores: dict[str, float]) -> float:
-        """Trust the model's own overall, but recompute if it gave nonsense."""
+        """Capped by answer_fit: a report that answers the wrong question cannot score well.
+
+        The model's self-reported overall used to be taken verbatim, which is how a 2000-word
+        essay about weather APIs scored 0.91 for a question about the weather.
+        """
         value = self._clamp(raw)
-        if value > 0.0:
-            return value
-        return round(sum(scores.values()) / len(DIMENSIONS), 3)
+        if value <= 0.0:
+            value = round(sum(scores.values()) / len(DIMENSIONS), 3)
+        return round(min(value, scores["answer_fit"]), 3)
 
     def _hint(self, raw: Any, scores: dict[str, float], overall: float) -> str:
         """An unrecognised or self-contradictory hint would strand the supervisor."""
         cleaned = str(raw or "").strip().lower()
 
-        # a passing score plus "fix_writing" sends the writer round forever, so trust the score
-        if overall >= self.settings.quality_approve_threshold and cleaned != APPROVE:
-            logger.bind(overall=overall, asked_for=cleaned[:30]).warning(
-                "critic.contradictory_hint"
-            )
-            return APPROVE
+        # approving a report that does not answer the question is the one contradiction we
+        # override — the supervisor sends this back to the planner, not the writer
+        if cleaned == APPROVE and scores["answer_fit"] < ANSWER_FIT_FLOOR:
+            logger.bind(answer_fit=scores["answer_fit"]).warning("critic.approved_wrong_topic")
+            return WRONG_TOPIC
 
         if cleaned in VALID_HINTS:
             return cleaned
 
         logger.bind(raw=cleaned[:60]).warning("critic.unparsable_hint")
+        if scores["answer_fit"] < ANSWER_FIT_FLOOR:
+            return WRONG_TOPIC
         if scores["faithfulness"] < 0.65:
             return NEED_MORE_RESEARCH
+        if overall >= self.settings.quality_approve_threshold:
+            return APPROVE
         return FIX_WRITING
 
     def _clamp(self, value: Any) -> float:

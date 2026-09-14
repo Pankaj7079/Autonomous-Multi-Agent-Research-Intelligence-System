@@ -68,6 +68,14 @@ class Settings(BaseSettings):
     research_quality_threshold: float = Field(default=0.60, ge=0.0, le=1.0)
     quality_approve_threshold: float = Field(default=0.72, ge=0.0, le=1.0)
 
+    # how many sources any agent prompt may carry; the researcher's cap never exceeds it
+    max_sources_in_prompt: int = Field(default=12, ge=1)
+    # browsers and search apis both throttle, so tasks fan out but not without bound
+    max_concurrent_research_tasks: int = Field(default=3, ge=1)
+    # 0.35 drops a source that matched only half the query and only in its body text —
+    # exactly the "weather API pricing" pages a "today's weather" query used to keep
+    relevance_floor: float = Field(default=0.35, ge=0.0, le=1.0)
+
     # groq's tokens-per-minute window is ~60s, so a shorter retry budget can never recover from it
     llm_retry_budget_seconds: float = Field(default=75.0, ge=0.0)
     # ragas makes one judge call per metric per context, so it needs its own ceiling

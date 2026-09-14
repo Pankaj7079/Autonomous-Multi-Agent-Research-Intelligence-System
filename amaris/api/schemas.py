@@ -15,6 +15,8 @@ JobState = Literal["queued", "running", "done", "failed"]
 # progress is derived from which agent is active, not a real fraction — the path is
 # decided at runtime so an exact percentage would be a lie (docs/DESIGN.md)
 AGENT_PROGRESS: dict[str, int] = {
+    "triage": 5,
+    "clarify": 99,
     "planner": 15,
     "researcher": 45,
     "analyst": 65,
@@ -29,6 +31,8 @@ SOURCE_SNIPPET_CHARS = 400
 
 # the supervisor is a router, not work, so it never moves the bar
 _AGENT_MESSAGES: dict[str, str] = {
+    "triage": "sizing the question before spending anything on it",
+    "clarify": "asking for the missing detail",
     "supervisor": "deciding what runs next",
     "planner": "breaking the question into research tasks",
     "researcher": "searching and gathering sources",
@@ -73,6 +77,8 @@ class RunTrace(BaseModel):
     routing_hint: str = ""
     quality_score: float = 0.0
     sources: list[dict[str, Any]] = Field(default_factory=list)
+    # what triage decided, and therefore what every budget downstream was set from
+    triage: dict[str, Any] = Field(default_factory=dict)
 
 
 class ResearchResult(BaseModel):
@@ -83,6 +89,8 @@ class ResearchResult(BaseModel):
     scores: dict[str, float] = Field(default_factory=dict)
     agent_path: list[str] = Field(default_factory=list)
     trace: RunTrace | None = None
+    # true when the run stopped to ask a question rather than answer one
+    awaiting_clarification: bool = False
 
 
 class JobStatus(BaseModel):
@@ -132,6 +140,8 @@ def _detail(agent: str, delta: dict[str, Any]) -> str:
         return f"gathered {len(delta['raw_research'])} sources"
     if agent == "critic" and delta.get("quality_score") is not None:
         return f"scored the draft {delta['quality_score']:.2f}"
+    if agent == "triage" and delta.get("query_depth"):
+        return f"triaged as {delta['query_depth']}"
     if agent == "supervisor" and delta.get("next_agent"):
         return f"routing to {delta['next_agent']}"
     return _AGENT_MESSAGES.get(agent, agent)
@@ -176,6 +186,7 @@ def result_from_state(state: GraphState) -> ResearchResult:
         citations=state["citations"],
         scores=scores,
         agent_path=state["agent_path"],
+        awaiting_clarification=not state.get("answerable", True),
         trace=RunTrace(
             decisions=state["decision_log"],
             react_stats=state["react_stats"],
@@ -191,5 +202,13 @@ def result_from_state(state: GraphState) -> ResearchResult:
             routing_hint=state["routing_hint"],
             quality_score=state["quality_score"],
             sources=[_trim_source(item) for item in state["raw_research"]],
+            triage={
+                "depth": state.get("query_depth", ""),
+                "answerable": state.get("answerable", True),
+                "clarifying_question": state.get("clarifying_question", ""),
+                "sections": state.get("report_sections", []),
+                "word_target": state.get("word_target", 0),
+                "reason": state.get("triage_reason", ""),
+            },
         ),
     )

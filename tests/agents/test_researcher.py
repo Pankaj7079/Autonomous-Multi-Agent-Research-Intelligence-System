@@ -9,6 +9,7 @@ import pytest
 
 from amaris.agents import researcher as researcher_module
 from amaris.agents.researcher import ResearcherAgent
+from amaris.agents.triage import budget_for
 from tests.helpers import ScriptedLLM, patch_invoke
 
 
@@ -33,7 +34,7 @@ def _no_network(monkeypatch: pytest.MonkeyPatch) -> None:
             {
                 "title": f"Result for {query}",
                 "url": f"https://example.com/{query.replace(' ', '-')}",
-                "content": "x" * 500,
+                "content": "Multi-agent system routing notes. " + "x" * 400,
                 "source": "duckduckgo",
             }
         ]
@@ -74,7 +75,9 @@ async def test_loop_never_exceeds_the_iteration_cap(monkeypatch: pytest.MonkeyPa
     """An agent that never says stop must still be cut off."""
     state["research_plan"] = [{"task_id": "t1", "description": "find things"}]
     agent = ResearcherAgent()
-    cap = agent.settings.max_react_iterations
+    cap = min(
+        budget_for(state["query_depth"]).react_iterations, agent.settings.max_react_iterations
+    )
     # one more search decision than the cap allows, so only the cap can stop it
     llm = patch_invoke(monkeypatch, agent, ScriptedLLM(*[decision("search")] * (cap + 1), "0.7"))
 
@@ -150,11 +153,11 @@ async def test_one_failing_task_does_not_lose_the_others(
     ) -> str:
         if "bad" in prompt:
             raise RuntimeError("this task blew up")
-        if "Rate overall research quality" in prompt:
+        if "Rate how well these sources answer" in prompt:
             return "0.6"
         return (
             decision("stop", None, True)
-            if "Sources found so far: 1" in prompt
+            if "sources found so far: 1" in prompt.lower()
             else decision("search")
         )
 
@@ -211,7 +214,9 @@ async def test_react_stats_records_self_termination(monkeypatch: pytest.MonkeyPa
 async def test_react_stats_records_hitting_the_cap(monkeypatch: pytest.MonkeyPatch, state) -> None:
     state["research_plan"] = [{"task_id": "t1", "description": "d"}]
     agent = ResearcherAgent()
-    cap = agent.settings.max_react_iterations
+    cap = min(
+        budget_for(state["query_depth"]).react_iterations, agent.settings.max_react_iterations
+    )
     patch_invoke(monkeypatch, agent, ScriptedLLM(*[decision("search")] * (cap + 1), "0.7"))
 
     update = await agent.run(state)
@@ -231,3 +236,73 @@ async def test_react_stats_merge_across_tasks_and_visits(
     update = await agent.run(researched_state)
     assert "t0" in update["react_stats"]
     assert update["react_stats"]["t1"]["self_terminated"] is True
+
+
+async def test_an_unambiguous_relevance_signal_skips_the_self_assessment(
+    monkeypatch: pytest.MonkeyPatch, state
+) -> None:
+    """Sources that clearly do or don't match the question need no judge — the call can't move it."""
+
+    async def off_topic(query: str, max_results: int = 8) -> list[dict[str, Any]]:
+        return [
+            {
+                "title": "AccuWeather API pricing plans",
+                "url": "https://example.com/api-pricing",
+                "content": "Developer tiers, request quotas and billing for our data feeds.",
+            }
+        ]
+
+    monkeypatch.setattr(researcher_module, "smart_search", off_topic)
+    state["research_plan"] = [{"task_id": "t1", "description": "d"}]
+    agent = ResearcherAgent()
+    llm = patch_invoke(
+        monkeypatch, agent, ScriptedLLM(decision("search"), decision("stop", None, True), "0.9")
+    )
+
+    update = await agent.run(state)
+    assert [p for p in llm.prompts if "Rate how well" in p] == []
+    assert update["research_quality"] < 0.2
+
+
+async def test_a_one_iteration_budget_spends_no_reasoning_call(
+    monkeypatch: pytest.MonkeyPatch, state
+) -> None:
+    """With no loop to reason about, the only sensible first move is to search the task itself."""
+    state["query_depth"] = "direct"
+    state["research_plan"] = [{"task_id": "t1", "description": "what is langgraph"}]
+    agent = ResearcherAgent()
+    llm = patch_invoke(monkeypatch, agent, ScriptedLLM(decision("search"), "0.8"))
+
+    update = await agent.run(state)
+    assert [p for p in llm.prompts if "ReAct research agent" in p] == []
+    assert len(update["raw_research"]) == 1
+
+
+async def test_off_topic_sources_are_dropped_before_anything_reads_them(
+    monkeypatch: pytest.MonkeyPatch, state
+) -> None:
+    """69 gathered, 12 read, 57 paid for and binned — the cut belongs here, once."""
+
+    async def mixed(query: str, max_results: int = 8) -> list[dict[str, Any]]:
+        return [
+            {
+                "title": "Multi-agent system design and agentic routing",
+                "url": "https://example.com/good",
+                "content": "How to make an agentic multi-agent system route work.",
+            },
+            {
+                "title": "Best pasta recipes for winter",
+                "url": "https://example.com/pasta",
+                "content": "Boil water, add salt, cook for eleven minutes.",
+            },
+        ]
+
+    monkeypatch.setattr(researcher_module, "smart_search", mixed)
+    state["research_plan"] = [{"task_id": "t1", "description": "d"}]
+    agent = ResearcherAgent()
+    patch_invoke(
+        monkeypatch, agent, ScriptedLLM(decision("search"), decision("stop", None, True), "0.8")
+    )
+
+    urls = [s["url"] for s in (await agent.run(state))["raw_research"]]
+    assert urls == ["https://example.com/good"]

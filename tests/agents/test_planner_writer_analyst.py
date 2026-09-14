@@ -199,3 +199,43 @@ async def test_writer_consumes_the_routing_hint(
     patch_invoke(monkeypatch, agent, ScriptedLLM("rewritten report"))
 
     assert (await agent.run(drafted_state))["routing_hint"] == ""
+
+
+async def test_writer_normalises_fullwidth_citation_brackets(
+    monkeypatch: pytest.MonkeyPatch, researched_state
+) -> None:
+    """Seen live: gpt-oss cites with 【1】, which no [n] matcher downstream finds."""
+    agent = WriterAgent()
+    patch_invoke(monkeypatch, agent, ScriptedLLM("## Answer\nLangGraph is a framework【1】【3】."))
+
+    assert (await agent.run(researched_state))["draft_report"].endswith("[1][3].")
+
+
+async def test_writer_is_told_to_answer_first_and_how_long(
+    monkeypatch: pytest.MonkeyPatch, researched_state
+) -> None:
+    """A 2000-word essay for a one-line question is what this replaced."""
+    researched_state["query_depth"] = "direct"
+    researched_state["report_sections"] = ["Answer"]
+    researched_state["word_target"] = 120
+    agent = WriterAgent()
+    llm = patch_invoke(monkeypatch, agent, ScriptedLLM("## Answer\nyes [1]"))
+    await agent.run(researched_state)
+
+    prompt = llm.prompts[0]
+    assert "## Answer" in prompt
+    assert "about 120 words" in prompt
+    assert "Executive Summary" not in prompt
+
+
+async def test_a_deep_query_still_gets_the_full_structure(
+    monkeypatch: pytest.MonkeyPatch, researched_state
+) -> None:
+    researched_state["query_depth"] = "deep"
+    researched_state["report_sections"] = []
+    agent = WriterAgent()
+    llm = patch_invoke(monkeypatch, agent, ScriptedLLM("## Answer\nyes [1]"))
+    await agent.run(researched_state)
+
+    assert "## Background & Context" in llm.prompts[0]
+    assert "## Conclusion & Recommendations" in llm.prompts[0]

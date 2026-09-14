@@ -9,13 +9,13 @@ from amaris.agents.base_agent import BaseAgent
 from amaris.observability.logging import logger
 from amaris.safety.injection import UNTRUSTED_NOTICE, wrap_untrusted
 from amaris.tools.code_executor import execute_python
+from amaris.tools.relevance import select_for_prompt
 from amaris.tools.vector_tool import search_knowledge_base
 
 if TYPE_CHECKING:
     from amaris.graph.state import GraphState
 
 SOURCE_CHARS = 600
-MAX_SOURCES_IN_PROMPT = 12
 KB_LIMIT = 3
 
 PROMPT = """You are a senior research analyst.
@@ -67,7 +67,14 @@ class AnalystAgent(BaseAgent):
         prompt = PROMPT.format(
             untrusted_notice=UNTRUSTED_NOTICE,
             query=state["original_query"],
-            sources=self._format_sources(state["raw_research"]),
+            sources=self._format_sources(
+                select_for_prompt(
+                    state["original_query"],
+                    state["raw_research"],
+                    self.settings.max_sources_in_prompt,
+                    self.settings.relevance_floor,
+                )
+            ),
             knowledge="; ".join(hit["text"][:200] for hit in knowledge) or "nothing stored yet",
         )
 
@@ -102,6 +109,6 @@ class AnalystAgent(BaseAgent):
         blocks = "\n\n".join(
             f"[{index}] {item.get('title', '')} — {item.get('url', '')}\n"
             f"{item.get('content', '')[:SOURCE_CHARS]}"
-            for index, item in enumerate(sources[:MAX_SOURCES_IN_PROMPT], start=1)
+            for index, item in enumerate(sources, start=1)
         )
         return wrap_untrusted(blocks)

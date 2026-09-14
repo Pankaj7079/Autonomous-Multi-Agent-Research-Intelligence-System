@@ -10,26 +10,31 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel, ConfigDict
 
 from amaris.agents.base_agent import AgentError, BaseAgent
+from amaris.agents.triage import budget_for
 from amaris.memory.mem0_memory import add_research_finding, recall_related
 from amaris.observability.logging import logger
 from amaris.safety.injection import UNTRUSTED_NOTICE, wrap_untrusted
+from amaris.tools.relevance import mean_relevance, score_source
 from amaris.tools.scraper_tool import needs_scraping, scrape_url
 from amaris.tools.search_tool import smart_search
 
 if TYPE_CHECKING:
+    from amaris.agents.triage import Budget
     from amaris.graph.state import GraphState
 
 SNIPPET_CHARS = 400
-# above the default research floor so the run still progresses, but never 'confident'
-UNASSESSED_QUALITY_CEILING = 0.7
 MEMORY_RECALL_LIMIT = 3
+
+# outside this band the lexical signal is unambiguous and a judge call cannot change the answer
+ASSESS_CONFIDENT_HIGH = 0.75
+ASSESS_CONFIDENT_LOW = 0.20
 
 REACT_PROMPT = """You are a ReAct research agent. Think, act, observe, repeat.
 
 {untrusted_notice}
 
 Task: {task_description}
-Sources found so far: {found_count}
+Relevant sources found so far: {found_count} (you are budgeted {budget} for this task)
 Previous findings: {prev_summary}
 Recalled from past sessions: {memory_context}
 Iteration {iteration} of {max_iterations}
@@ -43,19 +48,26 @@ Output JSON exactly:
   "sufficient": false
 }}
 
-Set sufficient=true and action="stop" when you have 5+ relevant recent sources
-covering the main angles. If results are thin, reformulate and search a
-different angle instead of stopping early.
+Stop as soon as the sources you have can answer the task — set sufficient=true
+and action="stop". Reaching your budget is a reason to stop, not a target to
+hit. Search again only when there is a specific gap you can name, and when you
+do, change the angle rather than repeating a query that already ran.
 
 CRITICAL: you have no tools and no browser access. Do not call any tool. Emit
 only the JSON object above — a separate system executes the action for you."""
 
-ASSESS_PROMPT = """You gathered {n} sources across {t} tasks.
-Rate overall research quality 0.0-1.0:
-  0.0-0.3 very few or irrelevant sources
-  0.3-0.6 some useful material, clear gaps remain
-  0.6-0.8 good coverage of most angles
-  0.8-1.0 excellent, diverse authoritative sources
+ASSESS_PROMPT = """Rate how well these sources answer the question, 0.0-1.0.
+
+Question: {query}
+
+Sources gathered ({n} across {t} tasks):
+{titles}
+
+Judge relevance to the question asked, not volume:
+  0.0-0.3 the sources are about something else
+  0.3-0.6 adjacent material, the actual question is not covered
+  0.6-0.8 the question is covered, some angles thin
+  0.8-1.0 the question is directly and authoritatively answered
 Output only a float."""
 
 
@@ -76,23 +88,27 @@ class ResearcherAgent(BaseAgent):
     task_type = "react"
 
     async def _run(self, state: GraphState) -> dict[str, Any]:
-        tasks = state["research_plan"] or [
-            {"task_id": "t1", "description": state["original_query"]}
-        ]
-        recalled = await recall_related(state["original_query"], limit=MEMORY_RECALL_LIMIT)
+        budget = budget_for(state["query_depth"])
+        query = state["original_query"]
+        tasks = state["research_plan"] or [{"task_id": "t1", "description": query}]
+        recalled = await recall_related(query, limit=MEMORY_RECALL_LIMIT)
+
+        # search apis and the headless browser both throttle, so fan out but not without bound
+        gate = asyncio.Semaphore(self.settings.max_concurrent_research_tasks)
+
+        async def run_task(task: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+            async with gate:
+                return await self._research_task(task, recalled, budget)
 
         # gather, not a loop — tasks are independent and serial made a 4-task plan 4x slower
-        outcomes = await asyncio.gather(
-            *(self._research_task(task, recalled) for task in tasks),
-            return_exceptions=True,
-        )
+        outcomes = await asyncio.gather(*(run_task(task) for task in tasks), return_exceptions=True)
 
         sources_outcomes = [
             outcome if isinstance(outcome, BaseException) else outcome[0] for outcome in outcomes
         ]
-        merged = self._merge(state["raw_research"], sources_outcomes)
-        quality = await self._self_assess(len(merged), len(tasks))
-        await self._remember(state["original_query"], merged)
+        merged = self._merge(query, state["raw_research"], sources_outcomes, budget)
+        quality = await self._self_assess(query, merged, len(tasks))
+        await self._remember(query, merged)
 
         # react_discipline (Layer 3) needs this: did the loop decide it was done, or run out of road
         new_stats = dict(state["react_stats"])
@@ -105,6 +121,7 @@ class ResearcherAgent(BaseAgent):
             new=len(merged) - len(state["raw_research"]),
             tasks=len(tasks),
             quality=quality,
+            depth=state["query_depth"],
             recalled=len(recalled),
         ).info("researcher.done")
 
@@ -117,19 +134,22 @@ class ResearcherAgent(BaseAgent):
         }
 
     async def _research_task(
-        self, task: dict[str, Any], recalled: list[str]
+        self, task: dict[str, Any], recalled: list[str], budget: Budget
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         """One ReAct loop. Returns what it gathered plus how it ended, even if a step failed."""
         task_id = str(task.get("task_id", "t?"))
         description = str(task.get("description", ""))
+        max_iterations = min(budget.react_iterations, self.settings.max_react_iterations)
         found: list[dict[str, Any]] = []
         iterations_used = 0
         self_terminated = False
 
-        for iteration in range(1, self.settings.max_react_iterations + 1):
+        for iteration in range(1, max_iterations + 1):
             iterations_used = iteration
             try:
-                decision = await self._decide(description, found, recalled, iteration)
+                decision = await self._decide(
+                    description, found, recalled, iteration, max_iterations, budget
+                )
             except Exception as exc:
                 # provider errors surface here too, not just AgentError — one bad step must
                 # not lose the sources this task already gathered
@@ -156,34 +176,53 @@ class ResearcherAgent(BaseAgent):
                 break
 
             if action == "search":
-                found.extend(await self._search(str(action_input), task_id, found))
+                found.extend(
+                    await self._search(str(action_input), task_id, found, budget.results_per_search)
+                )
             elif action == "fetch":
                 found.extend(await self._scrape(str(action_input), task_id))
             else:
                 logger.bind(task_id=task_id, action=action).warning("researcher.unknown_action")
                 break
 
+            # the budget is already met, so another reasoning step would only spend a call
+            if len(found) >= budget.max_sources:
+                self_terminated = True
+                break
+
         stats = {"iterations_used": iterations_used, "self_terminated": self_terminated}
         return found, stats
 
     async def _decide(
-        self, description: str, found: list[dict[str, Any]], recalled: list[str], iteration: int
-    ) -> dict[str, Any]:
+        self,
+        description: str,
+        found: list[dict[str, Any]],
+        recalled: list[str],
+        iteration: int,
+        max_iterations: int,
+        budget: Budget,
+    ) -> ReActDecision:
+        # with one iteration there is no loop to reason about: the only useful first move is
+        # to search the task itself, so the reasoning call is skipped outright
+        if max_iterations == 1 and not found:
+            return ReActDecision(action="search", action_input=description, sufficient=False)
+
         prompt = REACT_PROMPT.format(
             untrusted_notice=UNTRUSTED_NOTICE,
             task_description=description,
             found_count=len(found),
+            budget=budget.max_sources,
             prev_summary=self._summarise(found),
             memory_context="; ".join(recalled)[:500] or "nothing recalled",
             iteration=iteration,
-            max_iterations=self.settings.max_react_iterations,
+            max_iterations=max_iterations,
         )
         return await self._invoke_structured(prompt, ReActDecision)
 
     async def _search(
-        self, query: str, task_id: str, already: list[dict[str, Any]]
+        self, query: str, task_id: str, already: list[dict[str, Any]], max_results: int
     ) -> list[dict[str, Any]]:
-        results = await smart_search(query)
+        results = await smart_search(query, max_results=max_results)
         collected = [self._as_source(item, task_id) for item in results]
 
         # only scrape when the top snippet is too thin to be worth anything on its own
@@ -220,8 +259,18 @@ class ResearcherAgent(BaseAgent):
             "retrieved_at": datetime.now(UTC).isoformat(timespec="seconds"),
         }
 
-    def _merge(self, existing: list[dict[str, Any]], outcomes: list[Any]) -> list[dict[str, Any]]:
-        """Dedupe by URL across tasks and across earlier researcher visits."""
+    def _merge(
+        self,
+        query: str,
+        existing: list[dict[str, Any]],
+        outcomes: list[Any],
+        budget: Budget,
+    ) -> list[dict[str, Any]]:
+        """Dedupe, score against the query, drop the off-topic, and keep only what fits the budget.
+
+        Gathering 69 sources and handing 12 downstream was pure waste — the cut happens here now,
+        once, so every agent reads the same evidence and nothing is paid for twice.
+        """
         merged = list(existing)
         seen = {item.get("url") for item in existing}
 
@@ -235,14 +284,38 @@ class ResearcherAgent(BaseAgent):
                     continue
                 seen.add(url)
                 merged.append(source)
-        return merged
 
-    async def _self_assess(self, sources: int, tasks: int) -> float:
-        """The researcher rates its own work — the supervisor routes on this number."""
-        if sources == 0:
+        scored = [{**item, "relevance": score_source(query, item)} for item in merged]
+        kept = [item for item in scored if item["relevance"] >= self.settings.relevance_floor]
+        dropped = len(scored) - len(kept)
+        # everything scoring zero would leave the writer with nothing, so keep the best available
+        ranked = sorted(kept or scored, key=lambda item: item["relevance"], reverse=True)
+
+        if dropped:
+            logger.bind(dropped=dropped, kept=len(kept), floor=self.settings.relevance_floor).info(
+                "researcher.filtered"
+            )
+        return ranked[: min(budget.max_sources, self.settings.max_sources_in_prompt)]
+
+    async def _self_assess(self, query: str, sources: list[dict[str, Any]], tasks: int) -> float:
+        """The researcher rates its own work against the question — the supervisor routes on it."""
+        if not sources:
             return 0.0
+
+        lexical = mean_relevance(query, sources)
+        # clearly on-topic or clearly off-topic needs no judge: the call could not move the routing
+        if lexical >= ASSESS_CONFIDENT_HIGH or lexical <= ASSESS_CONFIDENT_LOW:
+            logger.bind(quality=lexical, llm=False).debug("researcher.assessed")
+            return lexical
+
         try:
-            raw = await self._invoke(ASSESS_PROMPT.format(n=sources, t=tasks))
+            prompt = ASSESS_PROMPT.format(
+                query=query,
+                n=len(sources),
+                t=tasks,
+                titles=self._summarise(sources),
+            )
+            raw = await self._invoke(prompt)
             match = re.search(r"\d*\.?\d+", raw)
             if match:
                 return max(0.0, min(1.0, float(match.group())))
@@ -250,10 +323,9 @@ class ResearcherAgent(BaseAgent):
         except AgentError as exc:
             logger.bind(error=str(exc)[:150]).warning("researcher.assess_failed")
 
-        # routing depends on this, so fall back to a count-based estimate rather than 0.0.
-        # capped well below 1.0: 62 sources scraped is not evidence of perfect research, and
-        # letting an unassessed run claim 1.0 told the supervisor to stop looking at it
-        return min(UNASSESSED_QUALITY_CEILING, round(sources / 8, 2))
+        # counting sources said 69 junk pages were good research, so fall back to how well
+        # the ones we kept actually match the question
+        return lexical
 
     async def _remember(self, query: str, sources: list[dict[str, Any]]) -> None:
         """Store the top findings so a future run starts ahead. No-ops without the memory extra."""
