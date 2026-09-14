@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 import time
 from collections.abc import Callable
@@ -25,7 +26,7 @@ from amaris.config.validate import ConfigReport, log_report, validate_config
 from amaris.observability.logging import configure_from_settings, logger
 from amaris.safety.guardrails import validate_input
 from frontend import thread
-from frontend.components import hero, label, provider_strip, topbar
+from frontend.components import hero, label, provider_strip
 from frontend.styles import inject_css, wordmark
 from frontend.views import inspection, landing, live_run
 
@@ -33,6 +34,13 @@ TERMINAL = ("done", "failed")
 HTTP_TIMEOUT_SECONDS = 30.0
 # mirrors ResearchRequest.query's min_length so both deployment modes reject the same input
 MIN_QUERY_CHARS = 3
+
+# each one triages to a different depth, so clicking any of them shows the budget logic working
+EXAMPLES = (
+    "what is the MCP protocol?",
+    "how does LangGraph differ from CrewAI?",
+    "why evaluate agent trajectories, not just answers?",
+)
 
 EventSink = Callable[[ProgressEvent], None]
 RunOutcome = tuple[ResearchResult | None, str, str | None]
@@ -137,15 +145,15 @@ def _execute(action: dict[str, Any], is_cloud: bool) -> None:
     ).info("frontend.run_finished")
 
 
-def _sidebar() -> None:
+def _sidebar(mode: str) -> None:
     """Deliberately lean — status and the thread only. Configuration lives in the System tab."""
     st.markdown(
-        f'{wordmark("sb-mark")}<div class="sb-sub">research console</div>',
+        f'{wordmark("sb-mark")}<div class="sb-sub">research console · {html.escape(mode)}</div>',
         unsafe_allow_html=True,
     )
     label("providers")
     provider_strip()
-    st.caption("first is primary · a seconds value is a cooldown")
+    st.caption("first is primary · a number is its cooldown")
 
     label("this conversation")
     thread.thread_sidebar()
@@ -155,6 +163,16 @@ def _sidebar() -> None:
         if st.button("start over", use_container_width=True):
             thread.clear()
             st.rerun()
+
+
+def _examples() -> None:
+    """One click into a real run — an empty page with only a text box offers nothing to try."""
+    label("try one", "runs a full pipeline")
+    for column, question in zip(st.columns(len(EXAMPLES)), EXAMPLES, strict=True):
+        with column:
+            if st.button(question, use_container_width=True, key=f"eg{hash(question)}"):
+                st.session_state[thread.PENDING] = thread.ask_request(question)
+                st.rerun()
 
 
 def _dispatch(action: dict[str, Any], settings: Any) -> None:
@@ -188,13 +206,12 @@ def main() -> None:
     settings = get_settings()
     inject_css()
 
-    from amaris.llm.router import configured_chain, provider_status
+    from amaris.llm.router import configured_chain
 
     with st.sidebar:
-        _sidebar()
+        _sidebar(settings.deployment_mode)
 
     chain = configured_chain()
-    topbar(settings.deployment_mode, chain, provider_status())
     for item in report.errors:
         st.error(item)
 
@@ -202,6 +219,7 @@ def main() -> None:
     if not turns:
         hero(chain)
         landing()
+        _examples()
 
     for index, turn in enumerate(turns):
         thread.turn_card(turn, index, is_last=index == len(turns) - 1)

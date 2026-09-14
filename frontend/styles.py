@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import html
+
 import streamlit as st
 
 # warm paper ground, ink text, one deep-teal accent. Light on purpose: the page is read for
@@ -58,13 +60,14 @@ _CSS = f"""
   background: var(--bg);
   color: var(--text);
   font-family: var(--sans);
+  font-size: 0.875rem;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }}
 #MainMenu, footer, [data-testid="stHeader"], [data-testid="stToolbar"],
 [data-testid="stDecoration"], [data-testid="stStatusWidget"] {{ display: none !important; }}
 
-.stMain .block-container {{ padding: 0 2rem 9rem; max-width: 1040px; }}
+.stMain .block-container {{ padding: 0 2rem 6.5rem; max-width: 1040px; }}
 ::selection {{ background: #cfe8e4; color: var(--text); }}
 
 /* streamlit stacks every element with a 1rem gap, which is what makes an app look
@@ -72,24 +75,38 @@ _CSS = f"""
 [data-testid="stVerticalBlock"] {{ gap: 0.55rem; }}
 [data-testid="stHorizontalBlock"] {{ gap: 0.45rem; }}
 
-.stApp, p, li, span, div, label {{ font-size: 0.875rem; }}
+/* the base size is set on .stApp alone and everything inherits it. listing bare span/div/p
+   here instead set the size ON each element, which beats inheritance — that is what rendered
+   the hero mark as a 96px "AMA" with a 14px "RIS" stuck to it. never reset a bare tag. */
 /* every number in this ui is data, so digits must not jitter between frames */
 .mono, .metric .v, .tl-row .at, .runbar, .tbl, .kv .v, .turn-meta, .vchip {{
   font-variant-numeric: tabular-nums;
 }}
 
 /* ═══ sidebar ══════════════════════════════════════════════════════════════ */
+/* the sidebar is part of the console, not a drawer: it carries provider health and the whole
+   thread. collapsing it hid the reopen arrow with the header, so there is no collapse at all —
+   these override streamlit's own collapsed state, whatever it sets */
 section[data-testid="stSidebar"] {{
   background: var(--bg-2);
   border-right: 1px solid var(--line);
   width: 236px !important;
+  min-width: 236px !important;
+  max-width: 236px !important;
+  transform: none !important;
+  visibility: visible !important;
+  margin-left: 0 !important;
 }}
+[data-testid="stSidebarCollapseButton"], [data-testid="stSidebarCollapsedControl"],
+[data-testid="stSidebarNavCollapseButton"] {{ display: none !important; }}
 section[data-testid="stSidebar"] .block-container {{ padding: 1.4rem 0.85rem 2rem; }}
 section[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {{ gap: 0.3rem; }}
 
 /* ═══ wordmark ═════════════════════════════════════════════════════════════ */
+/* no flex gap: "AMA" and the RIS span are separate flex items, so any gap here splits the
+   name into two words. the only space in the mark is the diamond's own margin. */
 .wordmark {{
-  display: inline-flex; align-items: baseline; gap: 0.34rem;
+  display: inline-flex; align-items: baseline; gap: 0;
   font-weight: 800; letter-spacing: -0.035em; color: var(--text);
   line-height: 1;
 }}
@@ -97,7 +114,38 @@ section[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {{ gap: 0.3rem;
   width: 7px; height: 7px; border-radius: 2px; background: var(--accent);
   transform: rotate(45deg); align-self: center; margin-right: 0.15rem;
 }}
+/* both halves of the name are one size, always — the mark's size is set on .wordmark only */
+.wordmark span {{ font-size: inherit; }}
 .wordmark .ris {{ color: var(--accent); }}
+
+/* the acronym on its own means nothing to a first-time reader — the full name sits
+   right under it, small, everywhere the mark appears at a readable size.
+   nowrap here previously forced a box wider than the viewport at 51 characters, which
+   Streamlit's own overflow-x:hidden then clipped — taking the sidebar off-screen with it.
+   bounding the width and letting it wrap two lines is what actually fits any screen. */
+.wm-group {{
+  display: inline-flex; flex-direction: column; align-items: flex-start; gap: 0.2rem;
+  max-width: 100%;
+}}
+.wm-full {{
+  font-family: var(--mono); font-size: 0.6rem; font-weight: 500; letter-spacing: 0.07em;
+  text-transform: uppercase; color: var(--ghost); max-width: 240px; line-height: 1.5;
+}}
+/* the group itself stays unbounded — it must size to the big mark, not to the caption.
+   only the caption gets a width cap, so it wraps to two short lines instead of stretching
+   the whole flex column wider than the mark (and, upstream, wider than the viewport) */
+.hero .wm-group {{ align-items: center; gap: 0.55rem; }}
+.hero .wm-full {{
+  font-size: 0.72rem; letter-spacing: 0.07em; color: var(--faint);
+  text-align: center; line-height: 1.6; max-width: min(90vw, 420px);
+}}
+
+/* three chips wrap ragged in a 236px column — one per row reads as a status list instead.
+   styled on the chip itself, not a wrapper div: a block wrapper here measured 11px short of
+   its own content and streamlit printed the next element on top of it */
+section[data-testid="stSidebar"] .chip {{
+  display: flex; width: 100%; margin: 0 0 0.3rem;
+}}
 
 .sb-mark {{ font-size: 1.32rem; }}
 .sb-sub {{
@@ -109,27 +157,10 @@ section[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {{ gap: 0.3rem;
   margin: -0.15rem 0 0.5rem 0.6rem; letter-spacing: 0.04em;
 }}
 
-/* ═══ masthead ═════════════════════════════════════════════════════════════ */
-.topbar {{
-  position: sticky; top: 0; z-index: 60;
-  display: flex; align-items: center; gap: 0.85rem; flex-wrap: wrap;
-  padding: 0.9rem 0 0.85rem; margin-bottom: 1.5rem;
-  background: linear-gradient(180deg, var(--bg) 72%, rgba(250,249,247,0.9));
-  backdrop-filter: blur(10px);
-  border-bottom: 1px solid var(--line);
-}}
-.topbar .mark {{ font-size: 1.06rem; }}
-.what {{
-  font-family: var(--mono); font-size: 0.67rem; color: var(--ghost);
-  letter-spacing: 0.09em; text-transform: uppercase;
-  padding-left: 0.85rem; border-left: 1px solid var(--line);
-}}
-.grow {{ flex: 1 1 auto; }}
-
 /* ═══ hero ═════════════════════════════════════════════════════════════════ */
 .hero {{
   display: flex; flex-direction: column; align-items: center;
-  text-align: center; padding: 3.2rem 0 1.4rem;
+  text-align: center; padding: 2.1rem 0 1rem;
 }}
 .hero-mark {{
   font-size: clamp(3.6rem, 9vw, 6rem);
@@ -139,8 +170,8 @@ section[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {{ gap: 0.3rem;
   width: 19px; height: 19px; border-radius: 5px; margin-right: 0.36rem;
 }}
 .tagline {{
-  margin: 1.1rem 0 0; font-size: 1.12rem; color: var(--dim);
-  font-weight: 400; letter-spacing: -0.008em; max-width: 44ch; line-height: 1.55;
+  margin: 1.4rem 0 0; font-size: 1.12rem; color: var(--dim);
+  font-weight: 400; letter-spacing: -0.008em; max-width: 44rem; line-height: 1.55;
 }}
 .eyebrow {{
   display: inline-flex; align-items: center; gap: 0.5rem;
@@ -162,7 +193,7 @@ section[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {{ gap: 0.3rem;
   border-radius: var(--r); overflow: hidden; box-shadow: var(--lift);
   margin: 1.6rem 0 0.5rem;
 }}
-.stat {{ background: var(--surface); padding: 1rem 1.1rem; }}
+.stat {{ background: var(--surface); padding: 1rem 1.1rem; text-align: center; }}
 .stat .n {{
   font-size: 1.7rem; font-weight: 800; letter-spacing: -0.035em;
   line-height: 1.05; color: var(--accent); font-variant-numeric: tabular-nums;
@@ -222,7 +253,6 @@ section[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {{ gap: 0.3rem;
 .chip.on {{ color: var(--good); }}
 .chip.hot {{ color: var(--warn); }}
 .chip.off {{ color: var(--ghost); }}
-.chip.accent {{ color: var(--accent); background: var(--accent-soft); border-color: #cde6e2; }}
 
 /* ═══ the turn card — the centrepiece ══════════════════════════════════════ */
 .turn {{
@@ -633,12 +663,21 @@ def inject_css() -> None:
     st.markdown(_CSS, unsafe_allow_html=True)
 
 
-def wordmark(extra: str = "") -> str:
-    """The product name as one piece of markup, so the masthead and sidebar cannot drift."""
-    return (
+# the acronym expanded once, here, so every place that shows it spells it the same way
+FULL_NAME = "autonomous multi-agent research & intelligence system"
+
+
+def wordmark(extra: str = "", *, full_form: bool = False) -> str:
+    """The product name as one piece of markup, so the hero and sidebar cannot drift."""
+    mark = (
         f'<span class="wordmark {extra}"><span class="dotmark"></span>'
         f"AMA<span class='ris'>RIS</span></span>"
     )
+    if not full_form:
+        return mark
+    # escaped because this goes straight into unsafe_allow_html — a bare & is not valid markup
+    full = html.escape(FULL_NAME)
+    return f'<span class="wm-group">{mark}<span class="wm-full">{full}</span></span>'
 
 
 def badge_class(value: float, floor: float) -> str:

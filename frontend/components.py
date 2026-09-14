@@ -58,33 +58,13 @@ def describe(text: str) -> None:
     st.markdown(f'<div class="desc">{html.escape(text)}</div>', unsafe_allow_html=True)
 
 
-def topbar(mode: str, chain: list[str], cooling: dict[str, float]) -> None:
-    """Identity, mode and live provider health in one 44px strip instead of a hero block."""
-    chips = [f'<span class="chip accent"><span class="dot"></span>{html.escape(mode)}</span>']
-    for name in chain:
-        seconds = cooling.get(name) or 0.0
-        state = "hot" if seconds else "on"
-        suffix = f" {seconds:.0f}s" if seconds else ""
-        chips.append(f'<span class="chip {state}"><span class="dot"></span>{name}{suffix}</span>')
-    if not chain:
-        chips.append('<span class="chip off">no provider configured</span>')
-    st.markdown(
-        '<div class="topbar">'
-        f"{wordmark('mark')}"
-        '<span class="what">autonomous research</span>'
-        '<span class="grow"></span>'
-        f"{''.join(chips)}</div>",
-        unsafe_allow_html=True,
-    )
-
-
 def hero(chain: list[str]) -> None:
     """The mark, one line, and what is live right now. The stat strip and grid follow it."""
     live = f"{len(chain)} providers live" if chain else "no provider configured"
     st.markdown(
         '<div class="hero">'
-        f"{wordmark('hero-mark')}"
-        '<p class="tagline">Five agents research your question&nbsp;— '
+        f"{wordmark('hero-mark', full_form=True)}"
+        '<p class="tagline">Eight agents research your question&nbsp;— '
         "and show every decision they made.</p>"
         f'<div class="eyebrow"><span class="pip"></span>{html.escape(live)} · $0 / month</div>'
         "</div>",

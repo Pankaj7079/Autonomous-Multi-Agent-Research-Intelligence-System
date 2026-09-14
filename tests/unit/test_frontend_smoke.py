@@ -46,13 +46,26 @@ def test_no_run_output_is_rendered_before_a_query_is_submitted() -> None:
     assert 'class="runbar' not in drawn
 
 
-def test_the_empty_state_carries_no_example_chips_or_explainer_paragraph() -> None:
-    """Both were removed deliberately: the headline and the grids below do that job."""
+def test_the_empty_state_offers_real_questions_but_no_explainer_paragraph() -> None:
+    """A page with only a text box gives a first-time reader nothing to try. The examples are
+    whole questions that dispatch a real run — the marketing explainer stays gone."""
     app = streamlit_testing.AppTest.from_file(APP, default_timeout=30).run()
     drawn = "".join(b.value for b in app.markdown if "<style>" not in b.value)
 
-    assert not any(b.label in ("mcp", "langgraph vs crewai") for b in app.button)
+    labels = [b.label for b in app.button]
+    assert any(label.endswith("?") for label in labels), labels
+    # bare keyword chips were the filler that got removed; full questions are the replacement
+    assert not any(label in ("mcp", "langgraph vs crewai") for label in labels)
     assert 'class="lede"' not in drawn
     # the wordmark and its one line are what remain
     assert "AMA" in drawn and "RIS" in drawn
     assert "show every decision" in drawn
+
+
+def test_the_wordmark_has_no_flex_gap_between_its_halves() -> None:
+    """ "AMA" and the RIS span are separate flex items, so any gap on .wordmark renders the
+    product name as two words. This shipped at 96px in the hero before it was caught."""
+    from frontend.styles import _CSS
+
+    rule = _CSS.split(".wordmark {")[1].split("}")[0]
+    assert "gap: 0;" in rule, rule
