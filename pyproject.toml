@@ -45,6 +45,9 @@ dependencies = [
     # by langchain today, but that's not a promise, so it's declared explicitly
     "pyyaml>=6.0",
     "langchain-openai>=1.6.2",
+    # the frontend renders a report inside its own card markup, so it needs markdown->html
+    # in python rather than streamlit's js renderer
+    "markdown-it-py>=3.0.0",
 ]
 
 [project.optional-dependencies]

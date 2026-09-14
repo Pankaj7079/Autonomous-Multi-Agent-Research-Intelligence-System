@@ -103,9 +103,11 @@ def run_config(session_id: str) -> dict[str, Any]:
     }
 
 
-async def run_research(query: str, session_id: str | None = None) -> GraphState:
+async def run_research(
+    query: str, session_id: str | None = None, *, seed: dict[str, Any] | None = None
+) -> GraphState:
     """Run the whole pipeline to completion and return the final state."""
-    state = new_state(query, session_id=session_id)
+    state = new_state(query, session_id=session_id, seed=seed)
     resolved = bind_session(state["session_id"])
     pipeline = await get_pipeline()
 
@@ -115,14 +117,14 @@ async def run_research(query: str, session_id: str | None = None) -> GraphState:
 
 
 async def stream_research(
-    query: str, session_id: str | None = None
+    query: str, session_id: str | None = None, *, seed: dict[str, Any] | None = None
 ) -> AsyncIterator[tuple[str, dict[str, Any], GraphState]]:
     """Yield (node, delta, state_so_far) per node transition until the run ends.
 
     One generator, two transports: the API publishes each event to pubsub, Streamlit in cloud
     mode consumes it directly. Raises whatever the graph raises — the caller marks the job failed.
     """
-    state = new_state(query, session_id=session_id)
+    state = new_state(query, session_id=session_id, seed=seed)
     resolved = bind_session(state["session_id"])
     pipeline = await get_pipeline()
 

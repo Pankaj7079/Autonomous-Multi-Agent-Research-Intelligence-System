@@ -7,10 +7,16 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, Field
 
+from amaris.agents.triage import HISTORY_TURNS
+from amaris.graph.state import DEPTHS
+
 if TYPE_CHECKING:
     from amaris.graph.state import GraphState
 
 JobState = Literal["queued", "running", "done", "failed"]
+
+# an expand reuses what the last turn gathered; 12 is the deepest budget's max_sources
+MAX_PRIOR_SOURCES = 12
 
 # progress is derived from which agent is active, not a real fraction — the path is
 # decided at runtime so an exact percentage would be a lie (docs/DESIGN.md)
@@ -43,11 +49,38 @@ _AGENT_MESSAGES: dict[str, str] = {
 }
 
 
+class PriorTurn(BaseModel):
+    """One earlier question and what it was answered with."""
+
+    query: str = Field(max_length=500)
+    answer: str = Field(default="", max_length=4000)
+
+
 class ResearchRequest(BaseModel):
-    """POST /research body."""
+    """POST /research body. The last three fields carry a conversation, not a cold start."""
 
     query: str = Field(min_length=3, max_length=500)
     session_id: str | None = None
+    history: list[PriorTurn] = Field(default_factory=list, max_length=HISTORY_TURNS)
+    # set to the depth the previous turn ran at; triage bumps it and spends no model call
+    expand_from_depth: str | None = None
+    prior_sources: list[dict[str, Any]] = Field(default_factory=list, max_length=MAX_PRIOR_SOURCES)
+
+    def seed(self) -> dict[str, Any]:
+        """What new_state() should carry forward. Empty dict for an ordinary first question."""
+        seed: dict[str, Any] = {}
+        if self.history:
+            seed["history"] = [turn.model_dump() for turn in self.history]
+        if self.expand_from_depth in DEPTHS:
+            seed["query_depth"] = self.expand_from_depth
+            seed["depth_locked"] = True
+            # the trace trims content down to "snippet", so accept either key or the reused
+            # sources reach the writer with no text at all
+            seed["raw_research"] = [
+                {**item, "content": item.get("content") or item.get("snippet", "")}
+                for item in self.prior_sources
+            ]
+        return seed
 
 
 class ResearchAccepted(BaseModel):

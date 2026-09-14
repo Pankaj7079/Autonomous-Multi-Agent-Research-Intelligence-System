@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict
 
 from amaris.agents.base_agent import AgentError, BaseAgent
 from amaris.agents.triage import budget_for
+from amaris.graph.state import subject
 from amaris.memory.mem0_memory import add_research_finding, recall_related
 from amaris.observability.logging import logger
 from amaris.safety.injection import UNTRUSTED_NOTICE, wrap_untrusted
@@ -89,7 +90,7 @@ class ResearcherAgent(BaseAgent):
 
     async def _run(self, state: GraphState) -> dict[str, Any]:
         budget = budget_for(state["query_depth"])
-        query = state["original_query"]
+        query = subject(state)
         tasks = state["research_plan"] or [{"task_id": "t1", "description": query}]
         recalled = await recall_related(query, limit=MEMORY_RECALL_LIMIT)
 

@@ -7,7 +7,8 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from amaris.agents.base_agent import BaseAgent
-from amaris.agents.triage import budget_for
+from amaris.agents.triage import budget_for, format_history
+from amaris.graph.state import subject
 from amaris.observability.logging import logger
 
 if TYPE_CHECKING:
@@ -32,7 +33,7 @@ Output JSON:
   ],
   "research_strategy": "one sentence on the overall angle"
 }}
-
+{history}
 Query: {query}"""
 
 
@@ -52,7 +53,8 @@ class PlannerAgent(BaseAgent):
     task_type = "planning"
 
     async def _run(self, state: GraphState) -> dict[str, Any]:
-        query = state["original_query"]
+        # the resolved question, not the raw one: a one-task plan searches this verbatim
+        query = subject(state)
         max_tasks = budget_for(state["query_depth"]).tasks
 
         # a one-task plan for a one-angle question is the query itself, so asking a model to
@@ -65,7 +67,12 @@ class PlannerAgent(BaseAgent):
             }
 
         payload = await self._invoke_structured(
-            PROMPT.format(query=query, max_tasks=max_tasks), PlannerOutput
+            PROMPT.format(
+                query=query,
+                max_tasks=max_tasks,
+                history=format_history(state.get("history", [])),
+            ),
+            PlannerOutput,
         )
         tasks = self._normalise_tasks(payload.tasks, query, max_tasks)
 

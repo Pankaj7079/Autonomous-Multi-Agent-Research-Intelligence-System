@@ -31,7 +31,9 @@ def finished_state(sample_state: GraphState) -> GraphState:
 
 
 def _fake_stream(steps: list[tuple[str, dict[str, Any]]], final: GraphState):
-    async def stream(query: str, session_id: str | None = None) -> AsyncIterator[tuple]:
+    async def stream(
+        query: str, session_id: str | None = None, *, seed: dict[str, Any] | None = None
+    ) -> AsyncIterator[tuple]:
         for node, delta in steps:
             yield node, delta, final
 
@@ -97,7 +99,9 @@ def test_short_query_is_rejected_before_a_job_exists(client: TestClient) -> None
 def test_a_raising_pipeline_marks_the_job_failed(
     client: TestClient, monkeypatch: pytest.MonkeyPatch, sample_state: GraphState
 ) -> None:
-    async def explodes(query: str, session_id: str | None = None) -> AsyncIterator[tuple]:
+    async def explodes(
+        query: str, session_id: str | None = None, *, seed: dict[str, Any] | None = None
+    ) -> AsyncIterator[tuple]:
         yield "planner", {}, sample_state
         raise RuntimeError("groq fell over")
 

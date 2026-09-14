@@ -19,6 +19,9 @@ class EvalResult:
     score: float
     passed: bool
     detail: str
+    # false when the judge never produced a number — "not scored" and "scored zero" mean
+    # opposite things, and consumers used to tell them apart by grepping detail for "NaN"
+    scored: bool = True
     timestamp: str = field(default_factory=lambda: datetime.now(UTC).isoformat(timespec="seconds"))
 
     def to_dict(self) -> dict[str, Any]:
@@ -28,13 +31,16 @@ class EvalResult:
             "score": round(self.score, 4),
             "passed": self.passed,
             "detail": self.detail,
+            "scored": self.scored,
             "timestamp": self.timestamp,
         }
 
 
 def zero_result(layer: str, metric: str, detail: str) -> EvalResult:
     """A metric that could not run. Every evaluator returns this instead of raising."""
-    return EvalResult(layer=layer, metric=metric, score=0.0, passed=False, detail=detail)
+    return EvalResult(
+        layer=layer, metric=metric, score=0.0, passed=False, detail=detail, scored=False
+    )
 
 
 @dataclass
@@ -46,11 +52,9 @@ class EvalReport:
     session_id: str = ""
 
     def overall(self) -> float:
-        return (
-            round(sum(r.score for r in self.results) / len(self.results), 4)
-            if self.results
-            else 0.0
-        )
+        """Mean of the metrics that actually scored. An unavailable judge is not a zero."""
+        scored = [r for r in self.results if r.scored]
+        return round(sum(r.score for r in scored) / len(scored), 4) if scored else 0.0
 
     def by_layer(self) -> dict[str, list[EvalResult]]:
         grouped: dict[str, list[EvalResult]] = {}

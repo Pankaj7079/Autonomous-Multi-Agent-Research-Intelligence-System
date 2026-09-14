@@ -35,7 +35,7 @@ def _result() -> ResearchResult:
         report="# Findings\n\nThe protocol standardises tool access [1].",
         citations=[{"index": 1, "title": "Spec", "url": "https://example.test/spec"}],
         scores={
-            "overall": 0.81,
+            "answer_fit": 0.84,
             "faithfulness": 0.9,
             "completeness": 0.7,
             "coherence": 0.85,
@@ -73,6 +73,13 @@ def _result() -> ResearchResult:
             analysis="Three findings emerged from the sources.",
             routing_hint="approve",
             quality_score=0.81,
+            triage={
+                "depth": "brief",
+                "answerable": True,
+                "sections": ["Answer", "Key Points"],
+                "word_target": 300,
+                "reason": "a couple of related points",
+            },
             sources=[
                 {
                     "title": "Spec",
@@ -91,14 +98,20 @@ def _result() -> ResearchResult:
     )
 
 
+def _turn(result: ResearchResult | None, error: str | None = None, events=None) -> dict:
+    return {
+        "query": "What is MCP?",
+        "result": result,
+        "events": events if events is not None else _events(),
+        "session_id": "5e700386",
+        "error": error,
+        "elapsed": 72.0,
+    }
+
+
 def _finished_app():
     app = streamlit_testing.AppTest.from_file(APP, default_timeout=30)
-    app.session_state["result"] = _result()
-    app.session_state["events"] = _events()
-    app.session_state["session_id"] = "5e700386"
-    app.session_state["error"] = None
-    app.session_state["elapsed"] = 72.0
-    app.session_state["last_query"] = "What is MCP?"
+    app.session_state["turns"] = [_turn(_result())]
     return app.run()
 
 
@@ -145,13 +158,40 @@ def test_the_system_tab_reports_the_live_configuration() -> None:
 
 def test_a_failed_run_shows_the_error_and_the_events_not_a_blank_page() -> None:
     app = streamlit_testing.AppTest.from_file(APP, default_timeout=30)
-    app.session_state["result"] = None
-    app.session_state["events"] = _events()[:3]
-    app.session_state["session_id"] = "dead0000"
-    app.session_state["error"] = "provider chain exhausted"
-    app.session_state["elapsed"] = 14.0
+    app.session_state["turns"] = [
+        _turn(None, error="provider chain exhausted", events=_events()[:3])
+    ]
     app.run()
     assert not app.exception, [e.value for e in app.exception]
-    drawn = "".join(b.value for b in app.markdown)
+    drawn = "".join(b.value for b in app.markdown) + "".join(e.value for e in app.error)
     assert "provider chain exhausted" in drawn
     assert 'class="log"' in drawn, "the event stream must survive a failed run"
+
+
+def test_a_turn_offers_the_deeper_rerun_and_names_the_depth_it_moves_to() -> None:
+    """Short by default is only reasonable if more is one click away and says what it costs."""
+    app = _finished_app()
+    labels = [b.label for b in app.button]
+    assert any("explain in detail" in label and "standard" in label for label in labels), labels
+
+
+def test_the_deepest_depth_has_nothing_left_to_expand_into() -> None:
+    result = _result()
+    result.trace.triage = {**result.trace.triage, "depth": "deep"}
+    app = streamlit_testing.AppTest.from_file(APP, default_timeout=30)
+    app.session_state["turns"] = [_turn(result)]
+    app.run()
+    assert not any("explain in detail" in b.label for b in app.button)
+
+
+def test_a_second_turn_renders_both_questions() -> None:
+    app = streamlit_testing.AppTest.from_file(APP, default_timeout=30)
+    first = _turn(_result())
+    second = {**_turn(_result()), "query": "what about its transport?"}
+    app.session_state["turns"] = [first, second]
+    app.run()
+
+    assert not app.exception, [e.value for e in app.exception]
+    drawn = "".join(b.value for b in app.markdown)
+    assert "What is MCP?" in drawn
+    assert "what about its transport?" in drawn

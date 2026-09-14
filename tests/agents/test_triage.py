@@ -18,11 +18,13 @@ def verdict(
     sections: list[str] | None = None,
     word_target: int = 700,
     reason: str = "needs a few angles weighed",
+    resolved_query: str = "",
 ) -> str:
     return json.dumps(
         {
             "depth": depth,
             "answerable": answerable,
+            "resolved_query": resolved_query,
             "clarifying_question": clarifying_question,
             "sections": sections if sections is not None else ["Answer", "Key Findings"],
             "word_target": word_target,
@@ -132,3 +134,92 @@ def test_shallow_depths_skip_the_analyst() -> None:
 
 def test_an_unknown_depth_still_returns_a_usable_budget() -> None:
     assert budget_for("nonsense") == DEPTH_BUDGETS[DEFAULT_DEPTH]
+
+
+def test_a_shallow_depth_does_not_earn_a_rewrite_round() -> None:
+    """The live 96.9s run spent 43.7s re-researching a brief answer to gain twelve words."""
+    assert budget_for("direct").max_revisions == 1
+    assert budget_for("brief").max_revisions == 1
+    assert budget_for("standard").max_revisions == 2
+
+
+# ── expand: the user already decided, so triage must spend nothing ─────────
+
+
+async def test_expanding_costs_no_model_call(monkeypatch: pytest.MonkeyPatch, state) -> None:
+    """A confirmation call here would be ADR-030's decorative-LLM bug rebuilt one layer up."""
+    state["query_depth"] = "brief"
+    state["depth_locked"] = True
+
+    agent = TriageAgent()
+    llm = patch_invoke(monkeypatch, agent, ScriptedLLM(verdict()))
+    update = await agent.run(state)
+
+    assert llm.prompts == []
+    assert update["query_depth"] == "standard"
+    assert update["word_target"] == budget_for("standard").word_target
+
+
+async def test_expanding_unlocks_so_the_next_question_is_triaged_normally(
+    monkeypatch: pytest.MonkeyPatch, state
+) -> None:
+    state["query_depth"] = "standard"
+    state["depth_locked"] = True
+    update = await triage(monkeypatch, state, verdict())
+
+    assert update["query_depth"] == "deep"
+    assert update["depth_locked"] is False
+
+
+async def test_expanding_the_deepest_depth_stays_there(
+    monkeypatch: pytest.MonkeyPatch, state
+) -> None:
+    state["query_depth"] = "deep"
+    state["depth_locked"] = True
+    assert (await triage(monkeypatch, state, verdict()))["query_depth"] == "deep"
+
+
+# ── follow-ups ────────────────────────────────────────────────────────────
+
+
+async def test_prior_turns_reach_the_prompt_so_a_pronoun_can_be_resolved(
+    monkeypatch: pytest.MonkeyPatch, state
+) -> None:
+    """Without this, "what about his brother?" is triaged as a question missing its subject."""
+    state["original_query"] = "what about his brother?"
+    state["history"] = [{"query": "tell about god rama", "answer": "Rama was born in Ayodhya."}]
+
+    agent = TriageAgent()
+    llm = patch_invoke(monkeypatch, agent, ScriptedLLM(verdict()))
+    await agent.run(state)
+
+    assert "tell about god rama" in llm.prompts[0]
+    assert "Rama was born in Ayodhya." in llm.prompts[0]
+
+
+async def test_a_first_question_carries_no_history_block(
+    monkeypatch: pytest.MonkeyPatch, state
+) -> None:
+    agent = TriageAgent()
+    llm = patch_invoke(monkeypatch, agent, ScriptedLLM(verdict()))
+    await agent.run(state)
+
+    assert "Earlier in this conversation" not in llm.prompts[0]
+
+
+async def test_a_follow_up_is_rewritten_into_a_standalone_search_string(
+    monkeypatch: pytest.MonkeyPatch, state
+) -> None:
+    """ "what about his brother?" searched verbatim finds nothing — it must carry its subject."""
+    state["original_query"] = "what about his brother?"
+    update = await triage(
+        monkeypatch, state, verdict(resolved_query="Who was Rama's brother Lakshmana?")
+    )
+    assert update["resolved_query"] == "Who was Rama's brother Lakshmana?"
+
+
+async def test_a_standalone_question_needs_no_rewrite(
+    monkeypatch: pytest.MonkeyPatch, state
+) -> None:
+    update = await triage(monkeypatch, state, verdict())
+    assert update["resolved_query"] == ""

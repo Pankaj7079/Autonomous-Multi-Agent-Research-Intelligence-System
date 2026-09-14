@@ -125,11 +125,9 @@ async def _safe_scores(state: GraphState) -> dict[str, float]:
         logger.bind(error=str(exc)[:200]).warning("evaluator.scoring_failed")
         return {}
 
-    # a NaN from a rate-limited judge is omitted, not stored as 0.0 — "not scored" and
+    # a metric the judge never scored is omitted, not stored as 0.0 — "not scored" and
     # "scored zero" mean opposite things and the ui cannot tell them apart downstream
-    scores = {
-        r.metric: r.score for r in (*retrieval_results, *report_results) if "NaN" not in r.detail
-    }
+    scores = {r.metric: r.score for r in (*retrieval_results, *report_results) if r.scored}
     scores["overall"] = round(sum(scores.values()) / len(scores), 4) if scores else 0.0
     return scores
 

@@ -26,7 +26,9 @@ def finished_state(sample_state: GraphState) -> GraphState:
 @pytest.fixture
 def stubbed_pipeline(monkeypatch: pytest.MonkeyPatch):
     def _apply(steps: list[tuple[str, dict]], final: GraphState) -> None:
-        async def stream(query: str, session_id: str | None = None) -> AsyncIterator[tuple]:
+        async def stream(
+            query: str, session_id: str | None = None, *, seed: dict | None = None
+        ) -> AsyncIterator[tuple]:
             for node, delta in steps:
                 yield node, delta, final
 
@@ -44,7 +46,7 @@ async def test_cloud_mode_emits_monotonic_progress_and_a_terminal_event(
     )
 
     seen: list[ProgressEvent] = []
-    result, session_id, error = await app._run_cloud("what is langgraph", seen.append)
+    result, session_id, error = await app._run_cloud({"query": "what is langgraph"}, seen.append)
 
     percentages = [e.progress_pct for e in seen]
     assert percentages == sorted(percentages), "a re-route must not rewind the bar"
@@ -60,6 +62,6 @@ async def test_cloud_mode_reports_a_pipeline_that_produced_nothing(
     stubbed_pipeline, finished_state: GraphState
 ) -> None:
     stubbed_pipeline([], finished_state)
-    result, _session, error = await app._run_cloud("q", lambda _: None)
+    result, _session, error = await app._run_cloud({"query": "qqq"}, lambda _: None)
     assert result is None
     assert error

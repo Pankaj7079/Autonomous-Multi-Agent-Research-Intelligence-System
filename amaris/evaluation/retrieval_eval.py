@@ -97,10 +97,10 @@ class RetrievalEvaluator:
                 )
             )
 
-        # a 0.0 that was actually a NaN needs to be visibly different from a real 0.0 in the log,
-        # or "the judge got rate limited" and "the sources were genuinely useless" look identical
-        nan_metrics = [r.metric for r in results if "NaN" in r.detail]
-        logger.bind(**{r.metric: r.score for r in results}, nan_metrics=nan_metrics or None).info(
+        # an unscored 0.0 needs to be visibly different from a real 0.0 in the log, or "the judge
+        # got rate limited" and "the sources were genuinely useless" look identical
+        unscored = [r.metric for r in results if not r.scored]
+        logger.bind(**{r.metric: r.score for r in results}, unscored=unscored or None).info(
             "retrieval_eval.scored"
         )
         return results

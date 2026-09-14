@@ -24,7 +24,6 @@ from frontend.components import (
     raw_inspector,
     react_discipline,
     research_plan,
-    route_demo,
     run_header,
     run_metrics,
     score_dashboard,
@@ -39,52 +38,15 @@ if TYPE_CHECKING:
 
 
 def landing() -> None:
-    """The empty state. It sells the system and explains it, rather than sitting blank."""
+    """What sits under the hero before a question is asked — the numbers and the agents.
+
+    The routing transcript, depth table and GraphState list that used to follow were removed:
+    they explained the system in prose instead of showing it, which the inspection tabs do.
+    """
     stat_strip()
-
     label("the agents")
-    describe(
-        "Each agent owns a decision rather than a step. Triage decides how much the question "
-        "is worth spending before anything is spent, and the supervisor decides the rest — but "
-        "only where the state of the run leaves the next step genuinely open."
-    )
+    describe("Each one owns a decision, not a step.")
     agent_grid()
-
-    left, right = st.columns([3, 2], gap="medium")
-    with left:
-        label("routing", "example run")
-        describe(
-            "Forced hops are graph edges and cost nothing. Only the gate lines are model calls, "
-            "and a fixed chain cannot produce the two marked ones."
-        )
-        route_demo()
-    with right:
-        label("state that carries the autonomy")
-        describe(
-            "Three fields in GraphState are what make the routing dynamic rather than declared."
-        )
-        kv_rows(
-            {
-                "query_depth": "triage sets every budget from it",
-                "next_agent": "supervisor writes, graph routes",
-                "research_quality": "researcher self-scores 0-1",
-                "routing_hint": "approve / fix / research / re-plan",
-                "decision_log": "every hop, and what it cost",
-                "react_stats": "did it self-stop or hit the cap",
-            },
-            boxed=True,
-        )
-        label("stack")
-        kv_rows(
-            {
-                "orchestration": "langgraph StateGraph",
-                "providers": "groq → gemini → glm",
-                "evaluation": "ragas + trajectory",
-                "transport": "fastapi + websocket",
-                "memory": "redis / qdrant / mem0",
-            },
-            boxed=True,
-        )
 
 
 def live_run(events: list[ProgressEvent]) -> None:
@@ -95,38 +57,19 @@ def live_run(events: list[ProgressEvent]) -> None:
     event_log(events)
 
 
-def _report_tab(result: ResearchResult, session_id: str) -> None:
-    label("report")
-    describe(
-        "Written by the writer agent from the analyst's synthesis. Every [n] marker points at "
-        "a real source in the Sources tab."
-    )
-    with st.container(border=True):
-        st.markdown(result.report)
-    st.download_button(
-        "download .md",
-        data=result.report,
-        file_name=f"amaris_{session_id[:8] or 'report'}.md",
-        mime="text/markdown",
-    )
-
-
 def _execution_tab(result: ResearchResult, events: list[ProgressEvent]) -> None:
     label("route taken", f"{len(result.agent_path)} hops")
-    describe(
-        f"{' → '.join(result.agent_path)}. An agent appearing twice means the supervisor "
-        "sent work back to it."
-    )
+    describe(f"{' → '.join(result.agent_path)} · a repeat means the supervisor sent work back")
     pipeline_flow(events)
 
     left, right = st.columns([3, 2], gap="medium")
     with left:
         label("timeline")
-        describe("Per-visit duration, in the order the agents actually ran.")
+        describe("Per visit, in execution order.")
         agent_timeline(events)
     with right:
         label("time per agent")
-        describe("A researcher or analyst spike usually means the provider chain fell back.")
+        describe("A spike usually means the provider chain fell back.")
         duration_chart(events)
 
     decision_trace(result.trace)
@@ -134,11 +77,24 @@ def _execution_tab(result: ResearchResult, events: list[ProgressEvent]) -> None:
     critic_verdict(result.trace)
 
     label("event stream", f"{len(events)}")
-    describe("Every node transition the run emitted, in order, with timings.")
+    describe("Every node transition, with timings.")
     event_log(events)
 
 
 def _evidence_tab(result: ResearchResult) -> None:
+    if result.trace and result.trace.triage:
+        triage = result.trace.triage
+        label("triage", str(triage.get("depth", "")))
+        describe("Read before anything was spent. Every budget below derives from it.")
+        kv_rows(
+            {
+                "depth": str(triage.get("depth", "")),
+                "word target": str(triage.get("word_target", "")),
+                "sections": ", ".join(triage.get("sections", [])) or "—",
+                "reason": str(triage.get("reason", "")) or "—",
+            },
+            boxed=True,
+        )
     research_plan(result.trace)
     analysis_view(result.trace)
 
@@ -146,26 +102,16 @@ def _evidence_tab(result: ResearchResult) -> None:
 def _sources_tab(result: ResearchResult) -> None:
     sources = result.trace.sources if result.trace else []
     label("sources", f"{len(result.citations)} cited of {len(sources)} gathered")
-    describe(
-        "Cited references are numbered exactly as the report numbers them. Everything the "
-        "researcher read but the writer left out is listed underneath."
-    )
+    describe("Numbered exactly as the report numbers them. Uncited sources follow.")
     source_list(result.citations, sources)
 
 
 def _evaluation_tab(result: ResearchResult) -> None:
     label("critic scores", "layer 3")
-    describe(
-        "The critic reads the draft against the sources and scores five dimensions. answer_fit "
-        "caps the overall score, so a polished report about the wrong subject cannot pass."
-    )
+    describe("answer_fit caps the overall, so a polished answer to the wrong question cannot pass.")
     score_dashboard(result.scores)
     label("ragas evaluation", "layers 1-2")
-    describe(
-        "Layer 1 scores the gathered sources against the question. Layer 2 scores the report "
-        "against those sources. Both need a separate LLM judge, so a rate-limited run says "
-        "'not scored' rather than pretending the answer was bad."
-    )
+    describe("A separate judge. A rate-limited run reads 'not scored', never zero.")
     evaluation_layers(result.scores)
 
 
@@ -175,11 +121,7 @@ def system_tab(report: ConfigReport | None = None) -> None:
     left, right = st.columns(2, gap="medium")
     with left:
         label("model routing")
-        describe(
-            "Calls try each provider in order and fall through on a rate limit or an error. The "
-            "evaluator's judge uses a different provider from the pipeline on purpose, so it is "
-            "not starved by the rate window the run just spent."
-        )
+        describe("Tried in order, falling through on a rate limit. The judge uses a different one.")
         kv_rows(
             {
                 "primary": settings.primary_provider,
@@ -193,10 +135,7 @@ def system_tab(report: ConfigReport | None = None) -> None:
             boxed=True,
         )
         label("deployment")
-        describe(
-            "Local mode runs a FastAPI backend with Redis and Qdrant. Cloud mode runs the same "
-            "graph in-process, so the demo works without Docker."
-        )
+        describe("Cloud mode runs the same graph in-process, with no Docker.")
         kv_rows(
             {
                 "mode": settings.deployment_mode,
@@ -209,11 +148,7 @@ def system_tab(report: ConfigReport | None = None) -> None:
         )
     with right:
         label("agent limits")
-        describe(
-            "The caps that stop a run looping forever. Each is a deliberate ceiling, and the "
-            "Execution tab reports whenever an agent stopped because of a cap rather than by "
-            "its own judgement."
-        )
+        describe("Ceilings, not targets. A shallow question gets a lower revision cap.")
         kv_rows(
             {
                 "research floor": f"{settings.research_quality_threshold:.2f}",
@@ -234,7 +169,7 @@ def system_tab(report: ConfigReport | None = None) -> None:
                 st.warning(item)
 
 
-def results(
+def inspection(
     result: ResearchResult | None,
     session_id: str,
     error: str | None,
@@ -242,26 +177,25 @@ def results(
     events: list[ProgressEvent],
     config_report: ConfigReport | None = None,
 ) -> None:
-    """Everything a finished run produced, split so each tab answers one question."""
-    run_header(events, session_id)
-    verdict_banner(result, error)
-    if error and result is not None:
-        st.warning(f"the run reported an error: {error}")
+    """Everything one turn left behind, split so each tab answers a single question."""
     if result is None or not result.report:
-        st.error("no report was produced")
+        verdict_banner(result, error)
         if events:
             label("what happened before it stopped")
             pipeline_flow(events)
             event_log(events)
         return
 
+    if error:
+        st.warning(f"the run reported an error: {error}")
+
+    label("how this run went", session_id[:8])
+    describe("The evidence behind the answer above, and what the run chose to spend.")
     run_metrics(result.trace, result.agent_path, elapsed)
 
-    report_tab, exec_tab, evidence_tab, sources_tab, eval_tab, sys_tab, raw_tab = st.tabs(
-        ["report", "execution", "evidence", "sources", "evaluation", "system", "raw"]
+    exec_tab, evidence_tab, sources_tab, eval_tab, sys_tab, raw_tab = st.tabs(
+        ["execution", "evidence", "sources", "evaluation", "system", "raw"]
     )
-    with report_tab:
-        _report_tab(result, session_id)
     with exec_tab:
         _execution_tab(result, events)
     with evidence_tab:
@@ -274,10 +208,7 @@ def results(
         system_tab(config_report)
     with raw_tab:
         label("raw payload")
-        describe(
-            "Exactly what the API returned plus every progress event. If a number appears "
-            "anywhere above, it came from here."
-        )
+        describe("Every number shown above came from here.")
         raw_inspector(result, events)
         st.download_button(
             "download .json",

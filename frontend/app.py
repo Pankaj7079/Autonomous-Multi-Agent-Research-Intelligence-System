@@ -6,6 +6,7 @@ import asyncio
 import json
 import time
 from collections.abc import Callable
+from typing import Any
 
 import httpx
 import streamlit as st
@@ -14,6 +15,7 @@ from websockets.asyncio.client import connect
 from amaris.api.schemas import (
     DONE_PROGRESS,
     ProgressEvent,
+    ResearchRequest,
     ResearchResult,
     build_progress_event,
     result_from_state,
@@ -22,26 +24,18 @@ from amaris.config.settings import get_settings
 from amaris.config.validate import ConfigReport, log_report, validate_config
 from amaris.observability.logging import configure_from_settings, logger
 from amaris.safety.guardrails import validate_input
-from frontend.components import (
-    example_queries,
-    hero,
-    history_sidebar,
-    label,
-    provider_strip,
-    record_run,
-    topbar,
-)
-from frontend.styles import inject_css
-from frontend.views import landing, live_run, results
+from frontend import thread
+from frontend.components import hero, label, provider_strip, topbar
+from frontend.styles import inject_css, wordmark
+from frontend.views import inspection, landing, live_run
 
 TERMINAL = ("done", "failed")
 HTTP_TIMEOUT_SECONDS = 30.0
+# mirrors ResearchRequest.query's min_length so both deployment modes reject the same input
+MIN_QUERY_CHARS = 3
 
 EventSink = Callable[[ProgressEvent], None]
 RunOutcome = tuple[ResearchResult | None, str, str | None]
-
-# one place to clear, so a new run never leaves half of the previous one on screen
-RUN_KEYS = ("events", "result", "session_id", "error", "elapsed", "last_query")
 
 
 @st.cache_resource
@@ -53,11 +47,20 @@ def _boot() -> ConfigReport:
     return report
 
 
-async def _run_local(query: str, on_event: EventSink) -> RunOutcome:
+def _payload(action: dict[str, Any]) -> dict[str, Any]:
+    """The POST body for one pending action — a new question or an expand of an old one."""
+    body: dict[str, Any] = {"query": action["query"], "history": action.get("history", [])}
+    if action.get("expand_from_depth"):
+        body["expand_from_depth"] = action["expand_from_depth"]
+        body["prior_sources"] = action.get("prior_sources", [])
+    return body
+
+
+async def _run_local(action: dict[str, Any], on_event: EventSink) -> RunOutcome:
     """POST the job, follow it over the WebSocket, then read the finished record back."""
     base = get_settings().api_base_url.rstrip("/")
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_SECONDS) as client:
-        response = await client.post(f"{base}/research", json={"query": query})
+        response = await client.post(f"{base}/research", json=_payload(action))
         response.raise_for_status()
         accepted = response.json()
 
@@ -76,14 +79,17 @@ async def _run_local(query: str, on_event: EventSink) -> RunOutcome:
     return result, session_id, job.get("error")
 
 
-async def _run_cloud(query: str, on_event: EventSink) -> RunOutcome:
+async def _run_cloud(action: dict[str, Any], on_event: EventSink) -> RunOutcome:
     """No API and no Redis here — the same generator the API drives, consumed in-process."""
     from amaris.graph.pipeline import stream_research
+
+    # the request model owns how a payload becomes a seed, so both modes build it the same way
+    seed = ResearchRequest(**_payload(action)).seed()
 
     pct = 0
     final = None
     started = time.perf_counter()
-    async for node, delta, state in stream_research(query):
+    async for node, delta, state in stream_research(action["query"], seed=seed):
         final = state
         event = build_progress_event(node, delta, pct, elapsed_s=time.perf_counter() - started)
         pct = event.progress_pct
@@ -103,13 +109,10 @@ async def _run_cloud(query: str, on_event: EventSink) -> RunOutcome:
     return result_from_state(final), final["session_id"], final["error"]
 
 
-def _execute(query: str, is_cloud: bool) -> None:
+def _execute(action: dict[str, Any], is_cloud: bool) -> None:
     """Drive one run, repainting the live view on every event rather than polling for state."""
-    for key in RUN_KEYS:
-        st.session_state.pop(key, None)
-
     events: list[ProgressEvent] = []
-    bar = st.progress(0, text="starting")
+    bar = st.progress(0, text=action.get("label", "starting"))
     track = st.empty()
 
     def on_event(event: ProgressEvent) -> None:
@@ -118,52 +121,63 @@ def _execute(query: str, is_cloud: bool) -> None:
         with track.container():
             live_run(events)
 
-    runner = _run_cloud(query, on_event) if is_cloud else _run_local(query, on_event)
+    runner = _run_cloud(action, on_event) if is_cloud else _run_local(action, on_event)
     started = time.perf_counter()
     try:
         result, session_id, error = asyncio.run(runner)
     finally:
-        # the live widgets are replaced by the persistent render below, not stacked with it
+        # the live widgets are replaced by the finished turn card, not stacked with it
         bar.empty()
         track.empty()
 
     elapsed = time.perf_counter() - started
-    st.session_state.update(
-        events=events,
-        result=result,
-        session_id=session_id,
-        error=error,
-        last_query=query,
-        elapsed=elapsed,
-    )
-    record_run(query, result, events, session_id, error, elapsed)
-    logger.bind(session_id=session_id, cloud=is_cloud).info("frontend.run_finished")
+    thread.append(action["query"], result, events, session_id, error, elapsed)
+    logger.bind(
+        session_id=session_id, cloud=is_cloud, expand=bool(action.get("expand_from_depth"))
+    ).info("frontend.run_finished")
 
 
 def _sidebar() -> None:
-    """Deliberately lean — status and history only. Configuration lives in the System tab."""
+    """Deliberately lean — status and the thread only. Configuration lives in the System tab."""
     st.markdown(
-        '<div class="sb-mark"><i>◆</i> AMARIS</div><div class="sb-sub">research console</div>',
+        f'{wordmark("sb-mark")}<div class="sb-sub">research console</div>',
         unsafe_allow_html=True,
     )
     label("providers")
     provider_strip()
     st.caption("first is primary · a seconds value is a cooldown")
 
-    label("history")
-    history_sidebar()
+    label("this conversation")
+    thread.thread_sidebar()
 
-    if st.session_state.get("result") is not None:
+    if thread.turns():
         label("session")
-        if st.button("new question", use_container_width=True):
-            for key in RUN_KEYS:
-                st.session_state.pop(key, None)
+        if st.button("start over", use_container_width=True):
+            thread.clear()
             st.rerun()
+
+
+def _dispatch(action: dict[str, Any], settings: Any) -> None:
+    """Run one pending action and convert the two likely failures into readable messages."""
+    try:
+        _execute(action, settings.is_cloud)
+    except (httpx.HTTPError, OSError) as exc:
+        # the single most likely local-mode mistake is the api simply not being up
+        st.error(
+            f"could not reach the API at {settings.api_base_url} — "
+            f"start it with `uv run uvicorn amaris.api.main:app` ({exc})"
+        )
+        return
+    except Exception as exc:
+        logger.bind(error=str(exc)[:200]).exception("frontend.run_failed")
+        st.error(f"the run failed: {exc}")
+        return
+    st.rerun()
 
 
 def main() -> None:
     # set_page_config must be the first streamlit call on the page; the sidebar carries
-    # status and history, so it must not open collapsed
+    # status and the thread, so it must not open collapsed
     st.set_page_config(
         page_title="AMARIS",
         page_icon="◆",
@@ -184,55 +198,49 @@ def main() -> None:
     for item in report.errors:
         st.error(item)
 
-    # the hero only makes sense before a run; afterwards the result is the headline
-    showing_result = st.session_state.get("result") is not None or st.session_state.get("error")
-    if not showing_result:
+    turns = thread.turns()
+    if not turns:
         hero(chain)
+        landing()
 
-    # a key separate from the widget's own — writing into the widget's key after it is
-    # instantiated is what crashed this page before
-    prefill = st.session_state.pop("prefill_query", "")
-    with st.form("research_form"):
-        field, action = st.columns([9, 1], gap="small")
-        query = field.text_input(
-            "Research question",
-            value=prefill,
-            placeholder="ask a research question…",
-            label_visibility="collapsed",
-        )
-        submitted = action.form_submit_button("run", type="primary", use_container_width=True)
-    example_queries()
+    for index, turn in enumerate(turns):
+        thread.turn_card(turn, index, is_last=index == len(turns) - 1)
 
-    if submitted and query.strip():
-        guard = validate_input(query)
+    # a pending action runs here so its live view lands under the thread, where the new
+    # turn card will appear once it finishes
+    pending = st.session_state.pop(thread.PENDING, None)
+    if pending:
+        _dispatch(pending, settings)
+        return
+
+    if turns:
+        focused = thread.selected()
+        if focused is not None:
+            inspection(
+                focused.get("result"),
+                focused.get("session_id", ""),
+                focused.get("error"),
+                focused.get("elapsed"),
+                focused.get("events", []),
+                report,
+            )
+
+    asked = st.chat_input(
+        "ask a follow-up…" if turns else "ask a research question…",
+        key="composer",
+    )
+    if asked and asked.strip():
+        # the same floor ResearchRequest enforces, checked here so cloud mode rejects a
+        # two-character question as readably as the API does instead of raising mid-run
+        if len(asked.strip()) < MIN_QUERY_CHARS:
+            st.error(f"a question needs at least {MIN_QUERY_CHARS} characters")
+            return
+        guard = validate_input(asked)
         if not guard.ok:
             st.error(guard.reason)
             return
-        try:
-            _execute(guard.text.strip(), settings.is_cloud)
-        except (httpx.HTTPError, OSError) as exc:
-            # the single most likely local-mode mistake is the api simply not being up
-            st.error(
-                f"could not reach the API at {settings.api_base_url} — "
-                f"start it with `uv run uvicorn amaris.api.main:app` ({exc})"
-            )
-            return
-        except Exception as exc:
-            logger.bind(error=str(exc)[:200]).exception("frontend.run_failed")
-            st.error(f"the run failed: {exc}")
-            return
-
-    if st.session_state.get("result") is not None or st.session_state.get("error"):
-        results(
-            st.session_state.get("result"),
-            st.session_state.get("session_id", ""),
-            st.session_state.get("error"),
-            st.session_state.get("elapsed"),
-            st.session_state.get("events", []),
-            report,
-        )
-    else:
-        landing()
+        st.session_state[thread.PENDING] = thread.ask_request(guard.text.strip())
+        st.rerun()
 
 
 if __name__ == "__main__":

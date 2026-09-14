@@ -64,3 +64,21 @@ def test_markdown_renders_every_layer_as_a_table() -> None:
 def test_to_dict_rounds_scores_for_json() -> None:
     result = EvalResult("report", "faithfulness", 0.123456789, True, "ok")
     assert result.to_dict()["score"] == 0.1235
+
+
+def test_an_unscored_metric_is_not_a_zero() -> None:
+    """An unavailable judge and a genuinely zero report must not average to the same number."""
+    report = EvalReport(
+        results=[
+            EvalResult("report", "faithfulness", 0.8, True, "checked"),
+            zero_result("retrieval", "context_precision", "ragas call failed or timed out"),
+        ]
+    )
+    assert report.overall() == 0.8
+
+
+def test_zero_result_marks_itself_unscored() -> None:
+    result = zero_result("report", "faithfulness", "judge unavailable")
+    assert result.scored is False
+    assert result.to_dict()["scored"] is False
+    assert EvalResult("report", "faithfulness", 0.0, False, "genuinely zero").scored is True

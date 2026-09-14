@@ -28,14 +28,17 @@ class Budget:
     analysis: bool
     word_target: int
     sections: tuple[str, ...]
+    # the critic pass this run is allowed to reach; 1 means review once and never rewrite,
+    # which is what stops a 60-word answer paying for a 44s re-research round
+    max_revisions: int
 
 
 # max_sources never exceeds what the writer actually reads, or we pay to gather and then discard
 DEPTH_BUDGETS: dict[str, Budget] = {
-    "direct": Budget(1, 1, 4, 6, False, 120, ("Answer",)),
-    "brief": Budget(2, 2, 5, 8, False, 300, ("Answer", "Key Points", "References")),
+    "direct": Budget(1, 1, 4, 6, False, 120, ("Answer",), 1),
+    "brief": Budget(2, 2, 5, 8, False, 300, ("Answer", "Key Points", "References"), 1),
     "standard": Budget(
-        3, 3, 6, 12, True, 700, ("Answer", "Key Findings", "Analysis", "References")
+        3, 3, 6, 12, True, 700, ("Answer", "Key Findings", "Analysis", "References"), 2
     ),
     "deep": Budget(
         5,
@@ -52,7 +55,16 @@ DEPTH_BUDGETS: dict[str, Budget] = {
             "Conclusion & Recommendations",
             "References",
         ),
+        2,
     ),
+}
+
+# what "explain in detail" moves to — the user's click decides this, so triage spends nothing
+NEXT_DEPTH: dict[str, str] = {
+    "direct": "brief",
+    "brief": "standard",
+    "standard": "deep",
+    "deep": "deep",
 }
 
 PROMPT = """You triage research questions before any work is spent on them.
@@ -60,10 +72,18 @@ Judge the question itself. Do not answer it and do not guess what the answer is.
 
 Decide three things.
 
-1. Is it answerable as written? It is NOT answerable when a parameter the answer
-   depends on is missing — no location for a local question, no subject for a
-   comparison, no timeframe where "now" cannot be looked up. If it is not
-   answerable, write the single shortest question that would unblock it.
+1. Is it answerable as written? Assume yes. Asking the reader a question costs them
+   a round trip, so only do it when no amount of searching could close the gap:
+   a local question with no place, a comparison with only one side, "now" where
+   there is no way to know when now is.
+
+   A named thing is always answerable. If the question names something — a protocol,
+   a library, a person, a product, an event — then searching for that name is the
+   job, even when the name is ambiguous or you do not recognise it. Research it and
+   say what you found; do not ask which one they meant.
+
+   If it genuinely is not answerable, write the single shortest question that
+   would unblock it.
 
 2. How many genuinely distinct angles does a good answer need?
      direct   — one settled fact or definition, one angle
@@ -71,20 +91,52 @@ Decide three things.
      standard — several angles that must be weighed against each other
      deep     — contested, comparative, or needs evidence on multiple sides
 
+   When a question sits between two of these, choose the shallower one. The reader
+   can ask for more depth in one click, and cannot un-read a report they did not want.
+
 3. What shape should the answer take? List the headings that actually earn their
    place. Short questions deserve short answers; do not pad one out to look thorough.
+
+4. Restate it as a question that stands on its own. If it leans on an earlier turn —
+   a pronoun, or a bare noun phrase — put the subject back in, because this is the
+   string the searches will actually run on. If it already stands alone, repeat it.
 
 Output JSON:
 {{
   "answerable": true,
+  "resolved_query": "the question as a standalone sentence",
   "clarifying_question": "",
   "depth": "direct|brief|standard|deep",
   "sections": ["Answer"],
   "word_target": 150,
   "reason": "one sentence on what the question needs"
 }}
-
+{history}
 Question: {query}"""
+
+HISTORY_BLOCK = """
+Earlier in this conversation:
+{turns}
+
+Read the new question in that light — a pronoun or a bare noun phrase usually points
+back at what was just answered, so resolve it rather than asking who or what is meant.
+"""
+
+# enough to resolve a pronoun, not enough to grow the prompt without bound
+HISTORY_TURNS = 3
+HISTORY_ANSWER_CHARS = 600
+
+
+def format_history(history: list[dict[str, str]]) -> str:
+    """The last few turns as a prompt block, or "" on the first question of a conversation."""
+    recent = [turn for turn in (history or []) if turn.get("query")][-HISTORY_TURNS:]
+    if not recent:
+        return ""
+    turns = "\n\n".join(
+        f"Q: {turn['query']}\nA: {(turn.get('answer') or '')[:HISTORY_ANSWER_CHARS]}"
+        for turn in recent
+    )
+    return HISTORY_BLOCK.format(turns=turns)
 
 
 class TriageOutput(BaseModel):
@@ -94,6 +146,7 @@ class TriageOutput(BaseModel):
 
     depth: str = DEFAULT_DEPTH
     answerable: bool = True
+    resolved_query: str = ""
     clarifying_question: str = ""
     sections: list[str] = Field(default_factory=list)
     word_target: int = 0
@@ -112,9 +165,15 @@ class TriageAgent(BaseAgent):
     task_type = "triage"
 
     async def _run(self, state: GraphState) -> dict[str, Any]:
+        if state.get("depth_locked"):
+            return self._expand(state)
         try:
             payload = await self._invoke_structured(
-                PROMPT.format(query=state["original_query"]), TriageOutput
+                PROMPT.format(
+                    query=state["original_query"],
+                    history=format_history(state.get("history", [])),
+                ),
+                TriageOutput,
             )
         except Exception as exc:
             # broad on purpose: a provider 400 is not an AgentError, and letting it reach the
@@ -122,6 +181,27 @@ class TriageAgent(BaseAgent):
             logger.bind(error=str(exc)[:150]).warning("triage.failed")
             payload = TriageOutput()
 
+        return self._settle(payload)
+
+    def _expand(self, state: GraphState) -> dict[str, Any]:
+        """The user clicked "explain in detail", so the depth is decided and costs no model call."""
+        depth = NEXT_DEPTH.get(state["query_depth"], DEFAULT_DEPTH)
+        budget = budget_for(depth)
+        logger.bind(depth=depth, from_depth=state["query_depth"], llm_decided=False).info(
+            "triage.expanded"
+        )
+        return {
+            "query_depth": depth,
+            "depth_locked": False,
+            "answerable": True,
+            "clarifying_question": "",
+            "report_sections": list(budget.sections),
+            "word_target": budget.word_target,
+            "triage_reason": f"expanded to {depth} on request",
+        }
+
+    def _settle(self, payload: TriageOutput) -> dict[str, Any]:
+        """Clamp the model's answer to something every downstream budget can be derived from."""
         depth = payload.depth.strip().lower()
         if depth not in DEPTHS:
             depth = DEFAULT_DEPTH
@@ -137,16 +217,19 @@ class TriageAgent(BaseAgent):
             payload.word_target if 40 <= payload.word_target <= 2000 else budget.word_target
         )
 
+        resolved = payload.resolved_query.strip()
         logger.bind(
             depth=depth,
             answerable=answerable,
             tasks=budget.tasks,
             words=word_target,
             sections=len(sections),
+            rewritten=bool(resolved),
         ).info("triage.decided")
 
         return {
             "query_depth": depth,
+            "resolved_query": resolved,
             "answerable": answerable,
             "clarifying_question": payload.clarifying_question.strip(),
             "report_sections": sections,

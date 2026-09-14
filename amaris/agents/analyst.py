@@ -6,6 +6,7 @@ import re
 from typing import TYPE_CHECKING, Any
 
 from amaris.agents.base_agent import BaseAgent
+from amaris.graph.state import subject
 from amaris.observability.logging import logger
 from amaris.safety.injection import UNTRUSTED_NOTICE, wrap_untrusted
 from amaris.tools.code_executor import execute_python
@@ -63,13 +64,13 @@ class AnalystAgent(BaseAgent):
     task_type = "analysis"
 
     async def _run(self, state: GraphState) -> dict[str, Any]:
-        knowledge = await search_knowledge_base(state["original_query"], limit=KB_LIMIT)
+        knowledge = await search_knowledge_base(subject(state), limit=KB_LIMIT)
         prompt = PROMPT.format(
             untrusted_notice=UNTRUSTED_NOTICE,
             query=state["original_query"],
             sources=self._format_sources(
                 select_for_prompt(
-                    state["original_query"],
+                    subject(state),
                     state["raw_research"],
                     self.settings.max_sources_in_prompt,
                     self.settings.relevance_floor,

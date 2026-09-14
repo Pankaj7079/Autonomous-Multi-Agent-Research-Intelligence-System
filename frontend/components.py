@@ -10,7 +10,7 @@ import streamlit as st
 
 from amaris.agents.critic import DIMENSIONS
 from amaris.config.settings import get_settings
-from frontend.styles import TOKENS, badge_class
+from frontend.styles import TOKENS, badge_class, wordmark
 
 if TYPE_CHECKING:
     from amaris.api.schemas import ProgressEvent, ResearchResult, RunTrace
@@ -32,6 +32,8 @@ FLOW_TAGS = {
     "evaluator": "EVL",
 }
 
+EVAL_METRICS = ("context_precision", "context_recall", "faithfulness", "answer_relevancy")
+
 # what each agent DECIDES is the interesting column — a list of duties would not show autonomy
 AGENT_ROWS: tuple[tuple[str, str, str, str], ...] = (
     ("TRI", "triage", "budget setter", "how much work the question is worth, before any is spent"),
@@ -43,30 +45,6 @@ AGENT_ROWS: tuple[tuple[str, str, str, str], ...] = (
     ("CRT", "critic", "review + routing", "approve, rewrite, re-research, or re-plan"),
     ("EVL", "evaluator", "scoring", "nothing — it scores the finished run after the fact"),
 )
-
-# a real transcript. the point is no longer that everything is routed, but that routing is
-# paid for only where state leaves the answer open
-ROUTE_DEMO: tuple[tuple[str, str, str, bool], ...] = (
-    ("triage", "no location given", "clarify", False),
-    ("triage", "one settled fact, depth=direct", "planner", False),
-    ("edge", "a plan always needs researching", "researcher", False),
-    ("gate 1", "quality 0.41 with 20 off-topic hits", "researcher", True),
-    ("gate 1", "quality 0.78, sources on topic", "analyst", False),
-    ("edge", "analysis always needs writing up", "writer", False),
-    ("edge", "a draft always needs reviewing", "critic", False),
-    ("gate 2", "answer_fit 0.2 — wrong question", "planner", True),
-    ("gate 2", "quality 0.81, critic approves", "FINISH", False),
-)
-
-EXAMPLE_QUERIES = (
-    ("mcp", "What is the Model Context Protocol (MCP)?"),
-    ("langgraph vs crewai", "Compare LangGraph and CrewAI for building multi-agent systems"),
-    ("langchain stack", "What is the relationship between LangChain, LangGraph, and LangSmith?"),
-    ("anthropic models", "What AI models has Anthropic released most recently?"),
-)
-
-HISTORY_LIMIT = 8
-EVAL_METRICS = ("context_precision", "context_recall", "faithfulness", "answer_relevancy")
 
 
 def label(text: str, note: str = "") -> None:
@@ -92,42 +70,23 @@ def topbar(mode: str, chain: list[str], cooling: dict[str, float]) -> None:
         chips.append('<span class="chip off">no provider configured</span>')
     st.markdown(
         '<div class="topbar">'
-        '<span class="mark">AMARIS</span>'
-        '<span class="what">multi-agent research</span>'
+        f"{wordmark('mark')}"
+        '<span class="what">autonomous research</span>'
         '<span class="grow"></span>'
         f"{''.join(chips)}</div>",
         unsafe_allow_html=True,
     )
 
 
-def agent_grid() -> None:
-    """The agents as cards. What each one DECIDES is the line that shows autonomy."""
-    cards = []
-    for index, (tag, name, role, decides) in enumerate(AGENT_ROWS):
-        core = " core" if name == "supervisor" else ""
-        # stagger the entrance so the grid assembles instead of snapping in
-        delay = f"animation-delay:{index * 45}ms;"
-        cards.append(
-            f'<div class="agent{core}" style="{delay}"><div class="badge">{tag}</div>'
-            f'<div class="nm">{html.escape(name)}</div>'
-            f'<div class="role">{html.escape(role)}</div>'
-            f'<div class="dec">{html.escape(decides)}</div></div>'
-        )
-    st.markdown(f'<div class="agents">{"".join(cards)}</div>', unsafe_allow_html=True)
-
-
 def hero(chain: list[str]) -> None:
-    """Gradient headline and a one-line promise. Compact — the command bar follows it."""
-    live = f"{len(chain)} providers wired" if chain else "no provider configured"
+    """The mark, one line, and what is live right now. The stat strip and grid follow it."""
+    live = f"{len(chain)} providers live" if chain else "no provider configured"
     st.markdown(
         '<div class="hero">'
+        f"{wordmark('hero-mark')}"
+        '<p class="tagline">Five agents research your question&nbsp;— '
+        "and show every decision they made.</p>"
         f'<div class="eyebrow"><span class="pip"></span>{html.escape(live)} · $0 / month</div>'
-        # a div, not an h1 — streamlit styles headings itself and wins the specificity fight
-        '<div class="h1">Research that shows<br/>its own reasoning.</div>'
-        '<p class="lede">Ask a question and it is triaged first, then planned, searched, '
-        "analysed, written up with citations and reviewed. A <b>supervisor LLM is spent only "
-        "where state leaves the next step genuinely open</b> — and every one of those calls, "
-        "and every one it skipped, is on screen.</p>"
         "</div>",
         unsafe_allow_html=True,
     )
@@ -135,35 +94,30 @@ def hero(chain: list[str]) -> None:
 
 def stat_strip() -> None:
     """Four numbers that frame the system before a run exists to describe it."""
-    cells = [
-        ("8", "autonomous agents"),
-        ("4", "depth budgets"),
-        ("3", "evaluation layers"),
-        ("$0", "monthly cost"),
-    ]
+    cells = (("8", "autonomous agents"), ("4", "depth budgets"), ("3", "evaluation layers"))
     st.markdown(
         '<div class="stats">'
         + "".join(
-            f'<div class="stat" style="animation-delay:{i * 60}ms">'
-            f'<div class="n">{n}</div><div class="l">{label_text}</div></div>'
-            for i, (n, label_text) in enumerate(cells)
+            f'<div class="stat"><div class="n">{n}</div><div class="l">{text}</div></div>'
+            for n, text in cells
         )
         + "</div>",
         unsafe_allow_html=True,
     )
 
 
-def route_demo() -> None:
-    """A real routing transcript. The two marked lines are decisions a fixed chain cannot make."""
-    lines = []
-    for who, why, to, looped in ROUTE_DEMO:
-        mark = ' <span class="loop">&#8635; re-route</span>' if looped else ""
-        lines.append(
-            f'<div><span class="who">{who.ljust(11)}</span>'
-            f'<span class="why">{html.escape(why).ljust(34)}</span>'
-            f'<span class="arr">&rarr;</span> <span class="to">{to}</span>{mark}</div>'
+def agent_grid() -> None:
+    """The agents as cards. What each one DECIDES is the line that shows autonomy."""
+    cards = []
+    for tag, name, role, decides in AGENT_ROWS:
+        core = " core" if name == "supervisor" else ""
+        cards.append(
+            f'<div class="agent{core}"><div class="badge">{tag}</div>'
+            f'<div class="nm">{html.escape(name)}</div>'
+            f'<div class="role">{html.escape(role)}</div>'
+            f'<div class="dec">{html.escape(decides)}</div></div>'
         )
-    st.markdown(f'<div class="trace">{"".join(lines)}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="agents">{"".join(cards)}</div>', unsafe_allow_html=True)
 
 
 def _visits(events: list[ProgressEvent]) -> list[tuple[ProgressEvent, float]]:
@@ -319,7 +273,9 @@ def verdict_banner(result: ResearchResult | None, error: str | None) -> None:
         return
 
     floor = get_settings().quality_approve_threshold
-    overall = result.scores.get("overall", 0.0)
+    # the critic's own overall, not scores["overall"] — result_from_state prefixes every
+    # evaluator metric as eval_*, so that key never existed and this banner was always yellow
+    overall = result.trace.quality_score
     revisions = result.trace.revision_count
     if overall >= floor:
         css, icon = "good", "&#10003;"
@@ -347,8 +303,12 @@ def run_metrics(trace: RunTrace | None, agent_path: list[str], elapsed: float | 
     """The numbers that explain the run, above the report rather than buried under it."""
     if trace is None:
         return
-    floor = get_settings().research_quality_threshold
+    settings = get_settings()
+    floor = settings.research_quality_threshold
+    approve = settings.quality_approve_threshold
     cells = [
+        # the verdict is based on this one, so it belongs in the strip and not only in the banner
+        ("quality", f"{trace.quality_score:.2f}", badge_class(trace.quality_score, approve)),
         ("sources", str(trace.source_count), ""),
         ("research q", f"{trace.research_quality:.2f}", badge_class(trace.research_quality, floor)),
         ("revisions", str(trace.revision_count), ""),
@@ -573,17 +533,6 @@ def source_list(citations: list[dict[str, Any]], sources: list[dict[str, Any]]) 
         st.markdown("".join(rows), unsafe_allow_html=True)
 
 
-def example_queries() -> None:
-    """Short labels, not truncated sentences — four grey boxes ending in an ellipsis read broken."""
-    cols = st.columns([1, 1, 1, 1, 2])
-    for col, (tag, query) in zip(cols, EXAMPLE_QUERIES, strict=False):
-        if col.button(tag, key=f"ex_{tag}", use_container_width=True):
-            # these chips render below the form, which streamlit has already drawn by now,
-            # so the value only lands if we re-run the script from the top
-            st.session_state["prefill_query"] = query
-            st.rerun()
-
-
 def provider_strip() -> None:
     """Which providers are usable right now, and a loud warning when none are."""
     from amaris.llm.router import configured_chain, provider_status
@@ -618,57 +567,6 @@ def kv_rows(rows: dict[str, str], boxed: bool = False) -> None:
     )
     # boxed when it sits beside a bordered panel, or the column reads as unfinished
     st.markdown(f'<div class="boxed">{body}</div>' if boxed else body, unsafe_allow_html=True)
-
-
-def record_run(
-    query: str,
-    result: ResearchResult | None,
-    events: list[ProgressEvent],
-    session_id: str,
-    error: str | None,
-    elapsed: float,
-) -> None:
-    """Keep the last few finished runs so starting a new query doesn't erase the last one."""
-    history: list[dict[str, Any]] = st.session_state.setdefault("history", [])
-    history.insert(
-        0,
-        {
-            "query": query,
-            "result": result,
-            "events": events,
-            "session_id": session_id,
-            "error": error,
-            "elapsed": elapsed,
-        },
-    )
-    del history[HISTORY_LIMIT:]
-
-
-def history_sidebar() -> None:
-    """Past runs, one click to reopen a finished one without paying for it again."""
-    history: list[dict[str, Any]] = st.session_state.get("history", [])
-    if not history:
-        st.caption("no runs yet")
-        return
-    for index, entry in enumerate(history):
-        result: ResearchResult | None = entry["result"]
-        overall = result.scores.get("overall") if result else None
-        tag = f"{overall:.2f}" if overall is not None else ("err" if entry["error"] else "—")
-        query = str(entry["query"])
-        label_text = query if len(query) <= 22 else f"{query[:22]}…"
-        if st.button(f"{tag}  {label_text}", key=f"hist_{index}", use_container_width=True):
-            st.session_state.update(
-                result=entry["result"],
-                events=entry["events"],
-                session_id=entry["session_id"],
-                error=entry["error"],
-                elapsed=entry["elapsed"],
-                last_query=entry["query"],
-            )
-        st.markdown(
-            f'<div class="hist-m">{entry["elapsed"] or 0:.0f}s · {len(entry["events"])} ev</div>',
-            unsafe_allow_html=True,
-        )
 
 
 def raw_inspector(result: Any, events: list[ProgressEvent]) -> None:

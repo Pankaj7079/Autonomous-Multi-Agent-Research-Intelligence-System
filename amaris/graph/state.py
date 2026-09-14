@@ -45,11 +45,20 @@ class GraphState(TypedDict):
 
     # triage — set once, before anything is spent, and read by every agent downstream
     query_depth: str
+    # true when the user asked to go deeper, so the depth is already decided and triage skips
+    depth_locked: bool
     answerable: bool
     clarifying_question: str
     report_sections: list[str]
     word_target: int
     triage_reason: str
+
+    # prior turns in this conversation, oldest first: {"query": ..., "answer": ...}
+    history: list[dict[str, str]]
+    # the question as a standalone sentence — "what about his brother?" is useless as a
+    # search string, so triage resolves it against history and everything that hunts for
+    # sources uses this instead. The answer still addresses original_query.
+    resolved_query: str
 
     # planner
     research_plan: list[dict[str, Any]]
@@ -93,13 +102,26 @@ class GraphState(TypedDict):
     error: str | None
 
 
-def new_state(query: str, session_id: str | None = None) -> GraphState:
-    """Build a complete initial state. Never hand-build this dict elsewhere."""
-    return GraphState(
+SEEDABLE = ("raw_research", "query_depth", "depth_locked", "history")
+
+
+def new_state(
+    query: str, session_id: str | None = None, *, seed: dict[str, Any] | None = None
+) -> GraphState:
+    """Build a complete initial state. Never hand-build this dict elsewhere.
+
+    `seed` carries a few fields forward from a previous turn — the sources already gathered, the
+    depth an expand click locked in, and the conversation so far. Everything else still blanks,
+    so a follow-up is a fresh run that happens to know what came before.
+    """
+    state = GraphState(
         session_id=session_id or new_session_id(),
         original_query=query.strip(),
         started_at=datetime.now(UTC).isoformat(timespec="seconds"),
         query_depth=DEFAULT_DEPTH,
+        depth_locked=False,
+        history=[],
+        resolved_query="",
         answerable=True,
         clarifying_question="",
         report_sections=[],
@@ -127,6 +149,15 @@ def new_state(query: str, session_id: str | None = None) -> GraphState:
         evaluation_scores={},
         error=None,
     )
+    for key in SEEDABLE:
+        if seed and key in seed:
+            state[key] = seed[key]  # type: ignore[literal-required]
+    return state
+
+
+def subject(state: GraphState) -> str:
+    """What to search and score sources against. Falls back to the query as the user typed it."""
+    return state.get("resolved_query") or state["original_query"]
 
 
 def source_count(state: GraphState) -> int:

@@ -4,24 +4,27 @@ from __future__ import annotations
 
 import streamlit as st
 
-# a modern product palette: violet-tinted near-black, glass surfaces, indigo→fuchsia accent.
-# status colours are reserved for status and are never used for decoration.
+# warm paper ground, ink text, one deep-teal accent. Light on purpose: the page is read for
+# minutes at a time. Status colours are reserved for status and never used for decoration.
 TOKENS = {
-    "bg": "#0a0a12",
-    "bg-2": "#0e0e1a",
-    "text": "#f2f3f7",
-    "dim": "#a4a9be",
-    "faint": "#6d7390",
-    "line": "rgba(255,255,255,0.09)",
-    "line-2": "rgba(255,255,255,0.14)",
-    "glass": "rgba(255,255,255,0.035)",
-    "glass-2": "rgba(255,255,255,0.06)",
-    "accent": "#818cf8",
-    "accent-2": "#c084fc",
-    "accent-3": "#22d3ee",
-    "good": "#34d399",
-    "warn": "#fbbf24",
-    "bad": "#fb7185",
+    "bg": "#faf9f7",
+    "bg-2": "#f2efea",
+    "surface": "#ffffff",
+    "surface-2": "#f6f4f1",
+    "surface-3": "#edeae5",
+    "line": "#e7e2db",
+    "line-2": "#d6cfc5",
+    "text": "#1c1a17",
+    "dim": "#5b5650",
+    "faint": "#8a837a",
+    "ghost": "#aaa298",
+    "accent": "#0f766e",
+    "accent-2": "#9a5b2d",
+    "accent-dim": "#7fc4bd",
+    "accent-soft": "#e6f2f0",
+    "good": "#15803d",
+    "warn": "#b45309",
+    "bad": "#be123c",
 }
 
 # below this a score is bad; the good floor comes from settings so the UI can never
@@ -35,504 +38,611 @@ _VARS = "\n".join(f"  --{name}: {value};" for name, value in TOKENS.items())
 
 _CSS = f"""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
 :root {{
 {_VARS}
   --sans: {SANS};
   --mono: {MONO};
-  --grad: linear-gradient(135deg, #818cf8 0%, #c084fc 55%, #22d3ee 100%);
-  --grad-soft: linear-gradient(135deg, rgba(129,140,248,0.16), rgba(192,132,252,0.10));
-  --shadow: 0 8px 32px rgba(0,0,0,0.45);
-  --shadow-lg: 0 16px 48px rgba(0,0,0,0.55);
+  --r: 10px;
+  --r-sm: 6px;
+  --r-lg: 14px;
+  /* on paper, depth comes from a soft drop shadow rather than an inset highlight */
+  --lift: 0 1px 2px rgba(28,26,23,0.04), 0 1px 3px rgba(28,26,23,0.03);
+  --lift-2: 0 2px 4px rgba(28,26,23,0.05), 0 8px 24px rgba(28,26,23,0.05);
+  --ease: 140ms cubic-bezier(0.4, 0, 0.2, 1);
 }}
 
-/* ── ground: deep base with two fixed colour glows ─────────── */
+/* ═══ ground ═══════════════════════════════════════════════════════════════ */
 .stApp {{
-  background:
-    radial-gradient(900px 600px at 12% -8%, rgba(129,140,248,0.13), transparent 60%),
-    radial-gradient(800px 560px at 92% 4%, rgba(192,132,252,0.10), transparent 62%),
-    radial-gradient(700px 500px at 60% 100%, rgba(34,211,238,0.06), transparent 60%),
-    var(--bg);
-  background-attachment: fixed;
+  background: var(--bg);
   color: var(--text);
   font-family: var(--sans);
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }}
-#MainMenu, footer, header {{ visibility: hidden; }}
-.block-container {{ padding-top: 1.1rem; padding-bottom: 4rem; max-width: 1360px; }}
-.stApp, p, li, span, div {{ font-size: 0.875rem; }}
-[data-testid="stMarkdownContainer"] p, [data-testid="stMarkdownContainer"] li {{
-  font-size: 0.9rem; line-height: 1.7; color: var(--dim);
-}}
-[data-testid="stMarkdownContainer"] h1 {{ font-size: 1.4rem; letter-spacing: -0.02em; }}
-[data-testid="stMarkdownContainer"] h2 {{
-  font-size: 1.12rem; letter-spacing: -0.015em; margin: 1.1rem 0 0.5rem; color: var(--text);
-}}
-[data-testid="stMarkdownContainer"] h3 {{
-  font-size: 0.98rem; margin: 0.9rem 0 0.35rem; color: var(--accent);
-}}
-[data-testid="stMarkdownContainer"] strong {{ color: var(--text); font-weight: 650; }}
+#MainMenu, footer, [data-testid="stHeader"], [data-testid="stToolbar"],
+[data-testid="stDecoration"], [data-testid="stStatusWidget"] {{ display: none !important; }}
 
+.stMain .block-container {{ padding: 0 2rem 9rem; max-width: 1040px; }}
+::selection {{ background: #cfe8e4; color: var(--text); }}
+
+/* streamlit stacks every element with a 1rem gap, which is what makes an app look
+   like a form. the rhythm is set per component instead. */
+[data-testid="stVerticalBlock"] {{ gap: 0.55rem; }}
+[data-testid="stHorizontalBlock"] {{ gap: 0.45rem; }}
+
+.stApp, p, li, span, div, label {{ font-size: 0.875rem; }}
+/* every number in this ui is data, so digits must not jitter between frames */
+.mono, .metric .v, .tl-row .at, .runbar, .tbl, .kv .v, .turn-meta, .vchip {{
+  font-variant-numeric: tabular-nums;
+}}
+
+/* ═══ sidebar ══════════════════════════════════════════════════════════════ */
 section[data-testid="stSidebar"] {{
-  background: rgba(10,10,20,0.72); backdrop-filter: blur(18px);
-  border-right: 1px solid var(--line); width: 262px !important;
+  background: var(--bg-2);
+  border-right: 1px solid var(--line);
+  width: 236px !important;
 }}
-section[data-testid="stSidebar"] .block-container {{ padding: 1.1rem 0.95rem; }}
+section[data-testid="stSidebar"] .block-container {{ padding: 1.4rem 0.85rem 2rem; }}
+section[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {{ gap: 0.3rem; }}
 
-@keyframes rise {{ from {{ opacity: 0; transform: translateY(8px); }} to {{ opacity: 1; transform: none; }} }}
-@keyframes glow {{ 0%,100% {{ opacity: 0.55; }} 50% {{ opacity: 1; }} }}
-@keyframes shimmer {{ to {{ background-position: 200% center; }} }}
+/* ═══ wordmark ═════════════════════════════════════════════════════════════ */
+.wordmark {{
+  display: inline-flex; align-items: baseline; gap: 0.34rem;
+  font-weight: 800; letter-spacing: -0.035em; color: var(--text);
+  line-height: 1;
+}}
+.wordmark .dotmark {{
+  width: 7px; height: 7px; border-radius: 2px; background: var(--accent);
+  transform: rotate(45deg); align-self: center; margin-right: 0.15rem;
+}}
+.wordmark .ris {{ color: var(--accent); }}
 
-/* ── glass card, the one surface everything is built from ─── */
-.card, .grid, .flow, .timeline, .log, .metric, .verdict, .src, .task, .trace, .boxed,
-[data-testid="stForm"], [data-testid="stExpander"] details {{
-  background: var(--glass) !important;
-  border: 1px solid var(--line) !important;
-  border-radius: 16px !important;
-  backdrop-filter: blur(14px);
-  box-shadow: var(--shadow);
+.sb-mark {{ font-size: 1.32rem; }}
+.sb-sub {{
+  font-family: var(--mono); font-size: 0.63rem; color: var(--ghost);
+  letter-spacing: 0.1em; text-transform: uppercase; margin: 0.4rem 0 1.3rem 0.05rem;
+}}
+.hist-m {{
+  font-family: var(--mono); font-size: 0.62rem; color: var(--ghost);
+  margin: -0.15rem 0 0.5rem 0.6rem; letter-spacing: 0.04em;
 }}
 
-/* ── top bar ──────────────────────────────────────────────── */
+/* ═══ masthead ═════════════════════════════════════════════════════════════ */
 .topbar {{
-  display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;
-  background: var(--glass); border: 1px solid var(--line); border-radius: 14px;
-  padding: 0.6rem 1rem; margin-bottom: 0.9rem; backdrop-filter: blur(14px);
-  box-shadow: var(--shadow); animation: rise 0.45s ease both;
-}}
-.topbar .mark {{
-  font-size: 1rem; font-weight: 800; letter-spacing: -0.02em;
-  background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent;
-}}
-.topbar .what {{ color: var(--faint); font-size: 0.78rem; }}
-.topbar .grow {{ flex: 1; }}
-
-/* ── hero ─────────────────────────────────────────────────── */
-.hero {{ padding: 0.4rem 0 1.1rem 0; animation: rise 0.5s ease both; }}
-.hero .eyebrow {{
-  display: inline-flex; align-items: center; gap: 0.45rem;
-  font-size: 0.72rem; font-weight: 600; letter-spacing: 0.02em;
-  color: var(--accent); background: var(--grad-soft);
-  border: 1px solid rgba(129,140,248,0.28); border-radius: 999px;
-  padding: 0.3rem 0.75rem; margin-bottom: 0.9rem;
-}}
-.hero .eyebrow .pip {{
-  width: 6px; height: 6px; border-radius: 50%; background: var(--good);
-  box-shadow: 0 0 10px var(--good); animation: glow 2s infinite;
-}}
-/* fit-content, or the gradient spans the full container and only white lands on the text.
-   block not inline-block, or the eyebrow badge above it flows onto the same line */
-.hero .h1 {{
-  display: block; width: fit-content;
-  font-size: 2.7rem !important; font-weight: 800; letter-spacing: -0.04em; line-height: 1.08;
-  margin: 0 0 0.75rem 0;
-  background: linear-gradient(115deg, #ffffff 0%, #c7d2fe 32%, #c084fc 66%, #22d3ee 100%);
-  -webkit-background-clip: text; background-clip: text; color: transparent;
-}}
-.hero .lede {{
-  color: var(--dim); font-size: 1rem; line-height: 1.65; max-width: 66ch; margin: 0;
-}}
-.hero .lede b {{ color: var(--text); font-weight: 600; }}
-
-/* ── stat strip ───────────────────────────────────────────── */
-.stats {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.7rem; margin: 1.2rem 0 0.5rem; }}
-.stat {{
-  background: var(--glass); border: 1px solid var(--line); border-radius: 14px;
-  padding: 0.85rem 1rem; backdrop-filter: blur(14px); animation: rise 0.5s ease both;
-}}
-.stat .n {{
-  font-size: 1.55rem; font-weight: 800; letter-spacing: -0.03em; line-height: 1.1;
-  background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent;
-}}
-.stat .l {{ color: var(--faint); font-size: 0.74rem; font-weight: 500; margin-top: 0.15rem; }}
-
-/* ── section heading ──────────────────────────────────────── */
-.lbl {{
-  display: flex; align-items: center; gap: 0.55rem;
-  font-size: 1.02rem; font-weight: 650; letter-spacing: -0.015em; color: var(--text);
-  margin: 1.9rem 0 0.35rem 0;
-}}
-.lbl .n {{
-  font-family: var(--mono); font-size: 0.68rem; font-weight: 600; color: var(--accent);
-  background: var(--grad-soft); border: 1px solid rgba(129,140,248,0.25);
-  border-radius: 999px; padding: 0.12rem 0.55rem;
-}}
-.desc {{ color: var(--dim); font-size: 0.875rem; line-height: 1.65; margin: 0 0 0.9rem 0; max-width: 92ch; }}
-
-/* ── chips ────────────────────────────────────────────────── */
-.chip {{
-  display: inline-flex; align-items: center; gap: 0.4rem;
-  font-size: 0.72rem; font-weight: 550; letter-spacing: 0.01em;
-  padding: 0.3rem 0.68rem; border-radius: 999px;
-  border: 1px solid var(--line-2); background: var(--glass-2); color: var(--dim);
+  position: sticky; top: 0; z-index: 60;
+  display: flex; align-items: center; gap: 0.85rem; flex-wrap: wrap;
+  padding: 0.9rem 0 0.85rem; margin-bottom: 1.5rem;
+  background: linear-gradient(180deg, var(--bg) 72%, rgba(250,249,247,0.9));
   backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--line);
 }}
-.chip .dot {{ width: 6px; height: 6px; border-radius: 50%; background: currentColor; }}
-.chip.on {{ color: var(--good); border-color: rgba(52,211,153,0.3); background: rgba(52,211,153,0.1); }}
-.chip.on .dot {{ box-shadow: 0 0 9px var(--good); animation: glow 2.4s infinite; }}
-.chip.hot {{ color: var(--warn); border-color: rgba(251,191,36,0.32); background: rgba(251,191,36,0.1); }}
-.chip.off {{ color: var(--faint); }}
-.chip.accent {{ color: var(--accent); border-color: rgba(129,140,248,0.35); background: var(--grad-soft); }}
+.topbar .mark {{ font-size: 1.06rem; }}
+.what {{
+  font-family: var(--mono); font-size: 0.67rem; color: var(--ghost);
+  letter-spacing: 0.09em; text-transform: uppercase;
+  padding-left: 0.85rem; border-left: 1px solid var(--line);
+}}
+.grow {{ flex: 1 1 auto; }}
 
-/* ── agent cards ──────────────────────────────────────────── */
-.agents {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.7rem; }}
+/* ═══ hero ═════════════════════════════════════════════════════════════════ */
+.hero {{
+  display: flex; flex-direction: column; align-items: center;
+  text-align: center; padding: 3.2rem 0 1.4rem;
+}}
+.hero-mark {{
+  font-size: clamp(3.6rem, 9vw, 6rem);
+  font-weight: 800; letter-spacing: -0.055em;
+}}
+.hero-mark .dotmark {{
+  width: 19px; height: 19px; border-radius: 5px; margin-right: 0.36rem;
+}}
+.tagline {{
+  margin: 1.1rem 0 0; font-size: 1.12rem; color: var(--dim);
+  font-weight: 400; letter-spacing: -0.008em; max-width: 44ch; line-height: 1.55;
+}}
+.eyebrow {{
+  display: inline-flex; align-items: center; gap: 0.5rem;
+  font-family: var(--mono); font-size: 0.63rem; letter-spacing: 0.16em;
+  text-transform: uppercase; color: var(--faint);
+  border: 1px solid var(--line); background: var(--surface);
+  border-radius: 999px; padding: 0.3rem 0.8rem; margin-top: 1.5rem;
+  box-shadow: var(--lift);
+}}
+.pip {{
+  width: 5px; height: 5px; border-radius: 50%; background: var(--good);
+  box-shadow: 0 0 0 3px rgba(21,128,61,0.13);
+}}
+
+/* ═══ stat strip ═══════════════════════════════════════════════════════════ */
+.stats {{
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px;
+  background: var(--line); border: 1px solid var(--line);
+  border-radius: var(--r); overflow: hidden; box-shadow: var(--lift);
+  margin: 1.6rem 0 0.5rem;
+}}
+.stat {{ background: var(--surface); padding: 1rem 1.1rem; }}
+.stat .n {{
+  font-size: 1.7rem; font-weight: 800; letter-spacing: -0.035em;
+  line-height: 1.05; color: var(--accent); font-variant-numeric: tabular-nums;
+}}
+.stat .l {{
+  font-family: var(--mono); font-size: 0.63rem; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--ghost); margin-top: 0.35rem;
+}}
+
+/* ═══ agent grid ═══════════════════════════════════════════════════════════ */
+.agents {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.55rem; }}
 .agent {{
-  background: var(--glass); border: 1px solid var(--line); border-radius: 16px;
-  padding: 1rem; backdrop-filter: blur(14px); box-shadow: var(--shadow);
-  transition: transform 200ms ease, border-color 200ms ease, box-shadow 200ms ease;
-  animation: rise 0.5s ease both; position: relative; overflow: hidden;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r);
+  padding: 0.9rem 0.95rem; box-shadow: var(--lift);
+  transition: border-color var(--ease), box-shadow var(--ease);
 }}
-.agent::before {{
-  content: ""; position: absolute; inset: 0 0 auto 0; height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.22), transparent);
-}}
-.agent:hover {{
-  transform: translateY(-3px); border-color: var(--line-2); box-shadow: var(--shadow-lg);
-}}
+.agent:hover {{ border-color: var(--accent-dim); box-shadow: var(--lift-2); }}
 .agent .badge {{
-  width: 38px; height: 38px; border-radius: 11px; display: flex; align-items: center;
-  justify-content: center; font-family: var(--mono); font-size: 0.72rem; font-weight: 700;
-  color: #0b0b14; background: var(--grad); margin-bottom: 0.7rem;
-  box-shadow: 0 6px 18px rgba(129,140,248,0.32);
+  display: inline-grid; place-items: center; width: 30px; height: 30px;
+  border-radius: var(--r-sm); font-family: var(--mono); font-size: 0.6rem;
+  font-weight: 600; letter-spacing: 0.05em; margin-bottom: 0.6rem;
+  color: var(--accent); background: var(--accent-soft); border: 1px solid #cde6e2;
 }}
-.agent.core .badge {{ background: linear-gradient(135deg, #c084fc, #f0abfc); }}
-.agent .nm {{ font-size: 0.98rem; font-weight: 650; letter-spacing: -0.01em; margin-bottom: 0.1rem; }}
+/* the supervisor is the one agent whose whole job is deciding, so it is marked */
+.agent.core .badge {{ color: #ffffff; background: var(--accent); border-color: var(--accent); }}
+.agent .nm {{ font-size: 0.88rem; font-weight: 700; letter-spacing: -0.012em; }}
 .agent .role {{
-  font-family: var(--mono); font-size: 0.68rem; color: var(--accent-2); margin-bottom: 0.5rem;
+  font-family: var(--mono); font-size: 0.63rem; color: var(--accent-2);
+  margin: 0.1rem 0 0.45rem; letter-spacing: 0.03em;
 }}
-.agent .dec {{ color: var(--dim); font-size: 0.815rem; line-height: 1.55; }}
-.agent .dec b {{ color: var(--text); font-weight: 600; }}
+.agent .dec {{ color: var(--faint); font-size: 0.775rem; line-height: 1.55; }}
 
-/* ── routing transcript ───────────────────────────────────── */
-.trace {{
-  font-family: var(--mono); font-size: 0.775rem; line-height: 2.05;
-  padding: 1rem 1.15rem !important; overflow-x: auto;
+/* ═══ section heading ══════════════════════════════════════════════════════ */
+.lbl {{
+  display: flex; align-items: center; gap: 0.55rem; margin: 2rem 0 0.35rem;
+  font-family: var(--mono); font-size: 0.67rem; letter-spacing: 0.15em;
+  text-transform: uppercase; color: var(--faint); font-weight: 500;
 }}
-.trace .who {{ color: var(--accent-2); }}
-.trace .why {{ color: var(--faint); }}
-.trace .to {{ color: var(--good); font-weight: 600; }}
-.trace .loop {{
-  color: var(--warn); background: rgba(251,191,36,0.12);
-  border: 1px solid rgba(251,191,36,0.25); border-radius: 6px; padding: 0.02rem 0.4rem;
-  font-size: 0.7rem;
+.lbl::after {{ content: ''; flex: 1; height: 1px; background: var(--line); }}
+.lbl .n {{
+  font-size: 0.61rem; padding: 0.1rem 0.45rem; border-radius: 999px;
+  background: var(--surface-3); color: var(--faint); letter-spacing: 0.06em;
 }}
-.trace .arr {{ color: var(--faint); }}
+.desc {{
+  color: var(--faint); font-size: 0.79rem; line-height: 1.65;
+  margin-bottom: 0.9rem; max-width: 76ch;
+}}
 
-/* ── pipeline flow ────────────────────────────────────────── */
+/* ═══ chips ════════════════════════════════════════════════════════════════ */
+.chip {{
+  display: inline-flex; align-items: center; gap: 0.35rem; font-family: var(--mono);
+  font-size: 0.67rem; padding: 0.24rem 0.58rem; border-radius: var(--r-sm);
+  border: 1px solid var(--line); background: var(--surface); color: var(--dim);
+  margin: 0 0.28rem 0.28rem 0; letter-spacing: 0.03em; box-shadow: var(--lift);
+}}
+.chip .dot {{ width: 5px; height: 5px; border-radius: 50%; background: currentColor; }}
+.chip.on {{ color: var(--good); }}
+.chip.hot {{ color: var(--warn); }}
+.chip.off {{ color: var(--ghost); }}
+.chip.accent {{ color: var(--accent); background: var(--accent-soft); border-color: #cde6e2; }}
+
+/* ═══ the turn card — the centrepiece ══════════════════════════════════════ */
+.turn {{
+  position: relative; overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  box-shadow: var(--lift-2);
+  padding: 1.3rem 1.5rem 1.1rem;
+  margin-top: 1.2rem;
+}}
+.turn::before {{
+  content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+  background: var(--accent); opacity: 0;
+}}
+.turn.current::before {{ opacity: 1; }}
+.turn.past {{ box-shadow: var(--lift); background: var(--surface-2); }}
+
+.turn-head {{ display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.55rem; }}
+.turn-head .who {{
+  font-family: var(--mono); font-size: 0.61rem; letter-spacing: 0.17em;
+  text-transform: uppercase; color: var(--ghost);
+}}
+.turn-head .rule {{ flex: 1; height: 1px; background: var(--line); }}
+.depth-chip {{
+  font-family: var(--mono); font-size: 0.61rem; letter-spacing: 0.13em;
+  text-transform: uppercase; color: var(--accent);
+  background: var(--accent-soft); border: 1px solid #cde6e2;
+  border-radius: 999px; padding: 0.14rem 0.58rem;
+}}
+.turn-q {{
+  font-size: 1.22rem; font-weight: 700; color: var(--text); line-height: 1.34;
+  letter-spacing: -0.022em; margin-bottom: 1.15rem;
+}}
+
+/* the rendered report lives here, so every markdown element is styled explicitly */
+.turn-a {{ color: var(--dim); font-size: 0.92rem; line-height: 1.75; }}
+.turn-a > *:first-child {{ margin-top: 0; }}
+.turn-a > *:last-child {{ margin-bottom: 0; }}
+.turn-a h2 {{
+  font-family: var(--mono); font-size: 0.65rem; font-weight: 600;
+  letter-spacing: 0.16em; text-transform: uppercase; color: var(--accent);
+  margin: 1.7rem 0 0.6rem; padding-bottom: 0.45rem; border-bottom: 1px solid var(--line);
+}}
+.turn-a h3 {{
+  font-size: 0.88rem; font-weight: 700; color: var(--text); margin: 1.2rem 0 0.35rem;
+  letter-spacing: -0.01em;
+}}
+.turn-a p {{ margin: 0 0 0.9rem; }}
+.turn-a ul, .turn-a ol {{ margin: 0 0 0.95rem; padding-left: 1.2rem; }}
+.turn-a li {{ margin-bottom: 0.45rem; }}
+.turn-a li::marker {{ color: var(--accent-dim); }}
+.turn-a strong {{ color: var(--text); font-weight: 650; }}
+.turn-a a {{
+  color: var(--accent); text-decoration: none; border-bottom: 1px solid #b9ded9;
+}}
+.turn-a a:hover {{ border-bottom-color: var(--accent); }}
+.turn-a code {{
+  font-family: var(--mono); font-size: 0.8rem; color: var(--accent-2);
+  background: var(--surface-3); padding: 0.1rem 0.35rem; border-radius: 4px;
+}}
+.turn-a pre {{
+  background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--r-sm);
+  padding: 0.85rem 1rem; overflow-x: auto; margin: 0 0 0.95rem;
+}}
+.turn-a pre code {{ background: none; padding: 0; color: var(--dim); }}
+.turn-a blockquote {{
+  margin: 0 0 0.95rem; padding-left: 0.95rem; border-left: 3px solid var(--accent-dim);
+  color: var(--faint);
+}}
+.turn-a table {{ width: 100%; border-collapse: collapse; font-size: 0.83rem; margin-bottom: 0.95rem; }}
+.turn-a th, .turn-a td {{ padding: 0.45rem 0.65rem; border-bottom: 1px solid var(--line); text-align: left; }}
+.turn-a th {{ color: var(--faint); font-weight: 600; }}
+/* the reference block is one paragraph of hard-broken lines; no `h2 + p` rule here, because
+   that also matches the answer paragraph and would set the actual answer in 8pt mono */
+.turn-a br {{ line-height: 2.15; }}
+
+/* instrument strip at the foot of a turn */
+.turn-meta {{
+  display: flex; align-items: center; gap: 0.8rem; flex-wrap: wrap;
+  margin-top: 1.2rem; padding-top: 0.85rem; border-top: 1px solid var(--line);
+  font-family: var(--mono); font-size: 0.7rem; letter-spacing: 0.03em;
+}}
+.turn-meta .m {{ color: var(--ghost); }}
+.turn-meta .m b {{ color: var(--dim); font-weight: 600; margin-right: 0.22rem; }}
+.turn-meta .bar {{ width: 1px; height: 11px; background: var(--line-2); }}
+.vchip {{
+  display: inline-flex; align-items: center; gap: 0.4rem;
+  font-size: 0.7rem; font-weight: 600; padding: 0.22rem 0.6rem;
+  border-radius: var(--r-sm); letter-spacing: 0.02em;
+}}
+.vchip .dot {{ width: 5px; height: 5px; border-radius: 50%; background: currentColor; }}
+.vchip.good {{ color: var(--good); background: #e7f5ec; }}
+.vchip.warn {{ color: var(--warn); background: #fbf0e2; }}
+.vchip.bad {{ color: var(--bad); background: #fceaee; }}
+
+/* ═══ pipeline flow ════════════════════════════════════════════════════════ */
 .flow {{
-  display: flex; align-items: stretch; overflow-x: auto; padding: 1rem 0.8rem !important;
+  display: flex; align-items: flex-start; gap: 0.15rem;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r);
+  box-shadow: var(--lift); padding: 1.05rem 0.95rem 0.9rem; overflow-x: auto;
 }}
-.flow .node {{
-  display: flex; flex-direction: column; align-items: center; gap: 0.45rem;
-  padding: 0 0.6rem; min-width: 92px;
+.flow .node {{ text-align: center; min-width: 60px; }}
+.flow .box {{
+  width: 38px; height: 38px; margin: 0 auto; border-radius: var(--r-sm);
+  display: grid; place-items: center; font-family: var(--mono); font-size: 0.6rem;
+  font-weight: 600; letter-spacing: 0.05em;
+  border: 1px solid var(--line); background: var(--surface-2); color: var(--ghost);
+  transition: all var(--ease);
 }}
-.flow .node .box {{
-  width: 46px; height: 46px; border-radius: 14px; display: flex; align-items: center;
-  justify-content: center; font-family: var(--mono); font-size: 0.68rem; font-weight: 700;
-  border: 1px solid var(--line-2); background: var(--glass-2); color: var(--faint);
-  transition: all 240ms ease;
+.flow .node .nm {{
+  display: block; font-size: 0.64rem; color: var(--ghost); margin-top: 0.4rem;
+  font-family: var(--mono); letter-spacing: 0.03em;
 }}
-.flow .node .nm {{ font-size: 0.75rem; color: var(--faint); font-weight: 500; }}
 .flow .node .hits {{
-  font-family: var(--mono); font-size: 0.64rem; color: var(--warn); font-weight: 600;
+  display: block; font-family: var(--mono); font-size: 0.6rem; color: var(--warn);
+  margin-top: 0.1rem;
 }}
 .flow .node.done .box {{
-  border-color: rgba(52,211,153,0.35); color: #0b0b14;
-  background: linear-gradient(135deg, #34d399, #10b981);
-  box-shadow: 0 6px 18px rgba(52,211,153,0.28);
+  border-color: #cde6e2; background: var(--accent-soft); color: var(--accent);
 }}
-.flow .node.done .nm {{ color: var(--text); }}
+.flow .node.done .nm {{ color: var(--dim); }}
 .flow .node.active .box {{
-  border-color: transparent; color: #0b0b14; background: var(--grad);
-  box-shadow: 0 0 0 4px rgba(129,140,248,0.18), 0 8px 24px rgba(129,140,248,0.4);
-  animation: pulse 1.8s infinite;
+  border-color: var(--accent); color: var(--accent); background: var(--surface);
+  box-shadow: 0 0 0 3px rgba(15,118,110,0.12);
+  animation: breathe 1.6s ease-in-out infinite;
 }}
-.flow .node.active .nm {{ color: var(--accent); font-weight: 650; }}
-.flow .node.failed .box {{
-  border-color: transparent; color: #0b0b14;
-  background: linear-gradient(135deg, #fb7185, #f43f5e);
-  box-shadow: 0 8px 24px rgba(251,113,133,0.35);
-}}
-.flow .node.failed .nm {{ color: var(--bad); }}
-.flow .node.pending {{ opacity: 0.38; }}
-.flow .sep {{
-  display: flex; align-items: center; color: var(--line-2);
-  padding-bottom: 1.6rem; font-size: 1.1rem;
-}}
-@keyframes pulse {{
-  0%,100% {{ box-shadow: 0 0 0 4px rgba(129,140,248,0.18), 0 8px 24px rgba(129,140,248,0.4); }}
-  50% {{ box-shadow: 0 0 0 9px rgba(129,140,248,0.06), 0 8px 30px rgba(129,140,248,0.55); }}
-}}
+.flow .node.failed .box {{ border-color: #f0c2cc; color: var(--bad); background: #fceaee; }}
+.flow .sep {{ color: var(--line-2); margin-top: 0.78rem; font-size: 0.75rem; }}
+@keyframes breathe {{ 0%,100% {{ opacity: 0.7; }} 50% {{ opacity: 1; }} }}
 
-/* ── run bar ──────────────────────────────────────────────── */
+/* ═══ run bar ══════════════════════════════════════════════════════════════ */
 .runbar {{
-  display: flex; align-items: center; gap: 0.85rem; flex-wrap: wrap;
-  background: var(--glass); border: 1px solid var(--line); border-radius: 14px;
-  padding: 0.7rem 1rem; margin-bottom: 0.75rem; font-size: 0.8rem; color: var(--dim);
-  backdrop-filter: blur(14px);
+  display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;
+  font-family: var(--mono); font-size: 0.7rem; color: var(--faint);
+  padding: 0.6rem 0.9rem; border: 1px solid var(--line); border-radius: var(--r);
+  background: var(--surface); box-shadow: var(--lift); letter-spacing: 0.03em;
 }}
-.runbar b {{ color: var(--text); font-weight: 650; font-family: var(--mono); }}
+.runbar b {{ color: var(--text); font-weight: 600; }}
 .runbar .sep {{ color: var(--line-2); }}
-.runbar .live {{
-  color: var(--accent); font-weight: 600; display: inline-flex; align-items: center; gap: 0.4rem;
-}}
-.runbar .live::before {{
-  content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--accent);
-  box-shadow: 0 0 10px var(--accent); animation: glow 1.4s infinite;
+.live {{ color: var(--accent); display: inline-flex; align-items: center; gap: 0.35rem; }}
+.live::before {{
+  content: ''; width: 5px; height: 5px; border-radius: 50%; background: var(--accent);
+  box-shadow: 0 0 0 3px rgba(15,118,110,0.16); animation: breathe 1.4s ease-in-out infinite;
 }}
 
-/* ── timeline ─────────────────────────────────────────────── */
-.timeline {{ overflow: hidden; }}
+/* ═══ timeline ═════════════════════════════════════════════════════════════ */
+.timeline {{
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r);
+  box-shadow: var(--lift); padding: 0.5rem 0.35rem;
+}}
 .tl-row {{
-  display: grid; grid-template-columns: 14px 116px 62px 1fr; gap: 0.8rem; align-items: center;
-  padding: 0.6rem 1rem; border-top: 1px solid var(--line); font-size: 0.845rem;
-  transition: background 160ms ease;
+  display: grid; grid-template-columns: 12px 104px 54px 1fr; align-items: center;
+  gap: 0.6rem; padding: 0.38rem 0.75rem; border-radius: var(--r-sm);
+  transition: background var(--ease);
 }}
-.tl-row:first-child {{ border-top: none; }}
-.tl-row:hover {{ background: rgba(255,255,255,0.025); }}
-.tl-row .dot {{
-  width: 9px; height: 9px; border-radius: 50%; background: var(--line-2); justify-self: center;
-}}
-.tl-row .nm {{ font-weight: 600; letter-spacing: -0.01em; }}
-.tl-row .at {{
-  font-family: var(--mono); font-size: 0.74rem; color: var(--faint); text-align: right;
-}}
-.tl-row .msg {{ color: var(--dim); }}
-.tl-row.done .dot {{ background: var(--good); box-shadow: 0 0 10px rgba(52,211,153,0.55); }}
-.tl-row.active {{ background: rgba(129,140,248,0.07); }}
+.tl-row:hover {{ background: var(--surface-2); }}
+.tl-row .dot {{ width: 6px; height: 6px; border-radius: 50%; background: var(--line-2); }}
+.tl-row .nm {{ font-weight: 500; color: var(--dim); font-size: 0.8rem; }}
+.tl-row .at {{ font-family: var(--mono); font-size: 0.7rem; color: var(--faint); text-align: right; }}
+.tl-row .msg {{ font-size: 0.75rem; color: var(--ghost); }}
+.tl-row.done .dot {{ background: var(--good); }}
+.tl-row.done .nm {{ color: var(--text); }}
 .tl-row.active .dot {{
-  background: var(--accent); box-shadow: 0 0 12px var(--accent); animation: glow 1.5s infinite;
+  background: var(--accent); box-shadow: 0 0 0 3px rgba(15,118,110,0.16);
+  animation: breathe 1.4s ease-in-out infinite;
 }}
 .tl-row.active .nm {{ color: var(--accent); }}
-.tl-row.failed .dot {{ background: var(--bad); box-shadow: 0 0 10px rgba(251,113,133,0.55); }}
-.tl-row.failed .nm {{ color: var(--bad); }}
-.tl-row.pending {{ opacity: 0.34; }}
+.tl-row.failed .dot {{ background: var(--bad); }}
+.tl-row.pending {{ opacity: 0.45; }}
 
-/* ── log ──────────────────────────────────────────────────── */
+/* ═══ event log ════════════════════════════════════════════════════════════ */
 .log {{
-  font-family: var(--mono); font-size: 0.76rem; line-height: 1.95;
-  padding: 0.9rem 1.1rem !important; max-height: 320px; overflow-y: auto;
-  background: rgba(0,0,0,0.32) !important;
+  background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--r);
+  padding: 0.75rem 0.95rem; max-height: 300px; overflow-y: auto;
+  font-family: var(--mono); font-size: 0.7rem; line-height: 1.95;
 }}
-.log .t {{ color: var(--faint); }}
-.log .a {{ color: var(--accent); }}
-.log .m {{ color: var(--dim); }}
+.log .t {{ color: var(--ghost); margin-right: 0.6rem; }}
+.log .a {{ color: var(--accent); margin-right: 0.6rem; }}
+.log .m {{ color: var(--faint); }}
 .log .ok {{ color: var(--good); }}
 .log .err {{ color: var(--bad); }}
 
-/* ── metrics ──────────────────────────────────────────────── */
-.metrics {{ display: flex; flex-wrap: wrap; gap: 0.7rem; margin: 0.3rem 0 1rem 0; }}
-.metric {{
-  flex: 1 1 128px; padding: 0.85rem 1rem !important; animation: rise 0.45s ease both;
-  transition: transform 200ms ease, border-color 200ms ease;
+/* ═══ metric strip ═════════════════════════════════════════════════════════ */
+.metrics {{
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(104px, 1fr)); gap: 1px;
+  background: var(--line); border: 1px solid var(--line);
+  border-radius: var(--r); overflow: hidden; margin: 1.1rem 0 0.3rem;
+  box-shadow: var(--lift);
 }}
-.metric:hover {{ transform: translateY(-2px); border-color: var(--line-2) !important; }}
+.metric {{ background: var(--surface); padding: 0.75rem 0.9rem; }}
 .metric .k {{
-  color: var(--faint); font-size: 0.72rem; font-weight: 500; letter-spacing: 0.01em;
+  font-family: var(--mono); font-size: 0.59rem; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--ghost);
 }}
 .metric .v {{
-  font-size: 1.5rem; font-weight: 800; letter-spacing: -0.03em; margin-top: 0.1rem;
-  background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent;
+  display: block; font-size: 1.35rem; font-weight: 700; color: var(--text);
+  margin-top: 0.25rem; letter-spacing: -0.025em; line-height: 1.1;
 }}
-.metric.good .v {{ background: linear-gradient(135deg,#34d399,#10b981); -webkit-background-clip: text; background-clip: text; }}
-.metric.warn .v {{ background: linear-gradient(135deg,#fbbf24,#f59e0b); -webkit-background-clip: text; background-clip: text; }}
-.metric.bad .v {{ background: linear-gradient(135deg,#fb7185,#f43f5e); -webkit-background-clip: text; background-clip: text; }}
+.metric.good .v {{ color: var(--good); }}
+.metric.warn .v {{ color: var(--warn); }}
+.metric.bad .v {{ color: var(--bad); }}
 
-/* ── verdict ──────────────────────────────────────────────── */
+/* ═══ verdict banner ═══════════════════════════════════════════════════════ */
 .verdict {{
-  display: flex; align-items: center; gap: 0.95rem; padding: 1rem 1.15rem !important;
-  margin-bottom: 0.9rem; animation: rise 0.45s ease both;
+  display: flex; align-items: center; gap: 0.85rem;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r);
+  box-shadow: var(--lift); padding: 0.85rem 1.05rem;
 }}
-.verdict .ic {{
-  width: 38px; height: 38px; border-radius: 12px; display: flex; align-items: center;
-  justify-content: center; font-size: 1.05rem; font-weight: 700; flex: 0 0 auto; color: #0b0b14;
+.verdict .ic {{ font-size: 0.9rem; flex: none; }}
+.verdict b {{ display: block; font-size: 0.87rem; font-weight: 650; }}
+.verdict .sub {{
+  display: block; font-family: var(--mono); font-size: 0.7rem;
+  color: var(--ghost); margin-top: 0.2rem; letter-spacing: 0.03em;
 }}
-.verdict b {{ display: block; font-size: 0.98rem; font-weight: 650; letter-spacing: -0.015em; }}
-.verdict .sub {{ color: var(--dim); font-size: 0.78rem; font-family: var(--mono); }}
-.verdict.good {{ border-color: rgba(52,211,153,0.3) !important; }}
-.verdict.good .ic {{ background: linear-gradient(135deg,#34d399,#10b981); box-shadow: 0 6px 20px rgba(52,211,153,0.32); }}
-.verdict.good b {{ color: var(--good); }}
-.verdict.warn {{ border-color: rgba(251,191,36,0.3) !important; }}
-.verdict.warn .ic {{ background: linear-gradient(135deg,#fbbf24,#f59e0b); box-shadow: 0 6px 20px rgba(251,191,36,0.3); }}
-.verdict.warn b {{ color: var(--warn); }}
-.verdict.bad {{ border-color: rgba(251,113,133,0.3) !important; }}
-.verdict.bad .ic {{ background: linear-gradient(135deg,#fb7185,#f43f5e); box-shadow: 0 6px 20px rgba(251,113,133,0.32); }}
-.verdict.bad b {{ color: var(--bad); }}
+.verdict.good {{ border-color: #bfe3cc; background: #f3faf5; }}
+.verdict.good .ic, .verdict.good b {{ color: var(--good); }}
+.verdict.warn {{ border-color: #ecd5ad; background: #fdf8f0; }}
+.verdict.warn .ic, .verdict.warn b {{ color: var(--warn); }}
+.verdict.bad {{ border-color: #f0c2cc; background: #fdf4f6; }}
+.verdict.bad .ic, .verdict.bad b {{ color: var(--bad); }}
 
-/* ── tables ───────────────────────────────────────────────── */
+/* ═══ tables ═══════════════════════════════════════════════════════════════ */
 .tbl {{
-  width: 100%; border-collapse: separate; border-spacing: 0; font-size: 0.83rem;
-  background: var(--glass); border: 1px solid var(--line); border-radius: 16px;
-  overflow: hidden; backdrop-filter: blur(14px);
+  width: 100%; border-collapse: collapse; font-size: 0.78rem;
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--r); overflow: hidden; box-shadow: var(--lift);
 }}
 .tbl th {{
-  text-align: left; padding: 0.7rem 0.95rem; color: var(--faint);
-  background: rgba(255,255,255,0.03); font-weight: 600; font-size: 0.73rem;
-  border-bottom: 1px solid var(--line);
+  text-align: left; font-family: var(--mono); font-size: 0.6rem; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--faint); font-weight: 500;
+  padding: 0.6rem 0.8rem; background: var(--surface-2); border-bottom: 1px solid var(--line);
 }}
-.tbl td {{ padding: 0.62rem 0.95rem; border-bottom: 1px solid var(--line); color: var(--dim); }}
+.tbl td {{ padding: 0.55rem 0.8rem; border-bottom: 1px solid var(--line); color: var(--dim); }}
 .tbl tr:last-child td {{ border-bottom: none; }}
-.tbl tbody tr {{ transition: background 160ms ease; }}
-.tbl tbody tr:hover {{ background: rgba(255,255,255,0.028); }}
+.tbl tbody tr {{ transition: background var(--ease); }}
+.tbl tbody tr:hover {{ background: var(--surface-2); }}
 .tbl b {{ color: var(--text); font-weight: 650; }}
 .tbl code, .mono {{
-  font-family: var(--mono); background: rgba(255,255,255,0.06); color: var(--accent);
-  padding: 0.12rem 0.4rem; border-radius: 6px; font-size: 0.73rem;
+  font-family: var(--mono); font-size: 0.71rem; color: var(--accent);
+  background: var(--accent-soft); padding: 0.1rem 0.4rem; border-radius: 4px;
 }}
 .diverged {{
-  color: var(--warn); background: rgba(251,191,36,0.13);
-  border: 1px solid rgba(251,191,36,0.28); border-radius: 6px;
-  padding: 0.04rem 0.42rem; font-size: 0.68rem; font-weight: 600;
+  font-family: var(--mono); font-size: 0.59rem; color: var(--warn);
+  background: #fbf0e2; padding: 0.1rem 0.38rem; border-radius: 4px;
+  margin-left: 0.45rem; letter-spacing: 0.06em;
 }}
-.unscored {{ color: var(--faint); font-style: italic; }}
-.v-good {{ color: var(--good); font-weight: 700; font-family: var(--mono); }}
-.v-warn {{ color: var(--warn); font-weight: 700; font-family: var(--mono); }}
-.v-bad {{ color: var(--bad); font-weight: 700; font-family: var(--mono); }}
+.unscored {{ color: var(--ghost) !important; font-style: italic; }}
+.v-good {{ color: var(--good) !important; font-weight: 650; }}
+.v-warn {{ color: var(--warn) !important; font-weight: 650; }}
+.v-bad {{ color: var(--bad) !important; font-weight: 650; }}
 
-/* ── sources ──────────────────────────────────────────────── */
+/* ═══ sources ══════════════════════════════════════════════════════════════ */
 .src {{
-  padding: 0.8rem 1rem !important; margin-bottom: 0.55rem;
-  transition: transform 180ms ease, border-color 180ms ease;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r);
+  box-shadow: var(--lift); padding: 0.8rem 1rem; margin-bottom: 0.45rem;
+  transition: border-color var(--ease);
 }}
-.src:hover {{ transform: translateX(3px); border-color: var(--line-2) !important; }}
-.src .hd {{ display: flex; gap: 0.55rem; align-items: baseline; }}
+.src:hover {{ border-color: var(--accent-dim); }}
+.src .hd {{ display: flex; align-items: baseline; gap: 0.6rem; }}
 .src .n {{
-  font-family: var(--mono); font-size: 0.72rem; color: var(--accent);
-  background: var(--grad-soft); border-radius: 6px; padding: 0.05rem 0.42rem; flex: 0 0 auto;
+  font-family: var(--mono); font-size: 0.65rem; color: var(--accent); flex: none;
+  background: var(--accent-soft); padding: 0.12rem 0.42rem; border-radius: 4px;
 }}
-.src a {{ color: var(--text); text-decoration: none; font-size: 0.9rem; font-weight: 600; }}
+.src a {{ color: var(--text); text-decoration: none; font-weight: 600; font-size: 0.85rem; }}
 .src a:hover {{ color: var(--accent); }}
 .src .u {{
-  font-family: var(--mono); font-size: 0.7rem; color: var(--faint);
-  word-break: break-all; margin-top: 0.2rem;
+  display: block; font-family: var(--mono); font-size: 0.65rem; color: var(--ghost);
+  margin: 0.3rem 0 0.35rem; word-break: break-all;
 }}
-.src .s {{ color: var(--dim); font-size: 0.82rem; line-height: 1.6; margin-top: 0.45rem; }}
+.src .s {{ font-size: 0.76rem; color: var(--faint); line-height: 1.6; }}
 
-/* ── key/value ────────────────────────────────────────────── */
-.boxed {{ padding: 0.35rem 1rem !important; }}
-.kv {{
-  display: flex; justify-content: space-between; gap: 0.8rem; align-items: baseline;
-  font-size: 0.8rem; padding: 0.48rem 0; border-bottom: 1px solid var(--line);
+/* ═══ key/value ════════════════════════════════════════════════════════════ */
+.boxed {{
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r);
+  box-shadow: var(--lift); padding: 0.35rem 0.95rem;
 }}
+.kv {{ display: flex; gap: 0.9rem; padding: 0.48rem 0; border-bottom: 1px solid var(--line); }}
 .kv:last-child {{ border-bottom: none; }}
-.kv .k {{ color: var(--faint); flex: 0 0 auto; font-weight: 500; }}
-/* min-width:0 or the value refuses to shrink and overflows, clipping its tail */
-.kv .v {{
-  color: var(--text); text-align: right; min-width: 0; flex: 1 1 auto;
-  overflow-wrap: anywhere; font-family: var(--mono); font-size: 0.76rem;
+.kv .k {{
+  flex: none; width: 128px; font-family: var(--mono); font-size: 0.68rem;
+  color: var(--ghost); letter-spacing: 0.04em;
 }}
+.kv .v {{ flex: 1; min-width: 0; color: var(--dim); font-size: 0.79rem; }}
 
-/* ── plan tasks ───────────────────────────────────────────── */
+/* ═══ plan tasks ═══════════════════════════════════════════════════════════ */
 .task {{
-  display: grid; grid-template-columns: 44px 1fr; gap: 0.85rem; align-items: start;
-  padding: 0.85rem 1rem !important; margin-bottom: 0.5rem;
-  transition: transform 180ms ease, border-color 180ms ease;
+  display: grid; grid-template-columns: 38px 1fr; gap: 0.75rem;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r);
+  box-shadow: var(--lift); padding: 0.75rem 0.95rem; margin-bottom: 0.4rem;
 }}
-.task:hover {{ transform: translateX(3px); border-color: var(--line-2) !important; }}
 .task .id {{
-  font-family: var(--mono); font-size: 0.7rem; font-weight: 700; color: #0b0b14;
-  background: var(--grad); border-radius: 8px; padding: 0.22rem 0; text-align: center;
-  box-shadow: 0 4px 14px rgba(129,140,248,0.28);
+  font-family: var(--mono); font-size: 0.66rem; color: var(--accent);
+  background: var(--accent-soft); border-radius: 4px; padding: 0.12rem 0;
+  text-align: center; height: fit-content;
 }}
-.task .w {{ font-size: 0.9rem; color: var(--text); line-height: 1.5; font-weight: 500; }}
-.task .m {{ font-family: var(--mono); font-size: 0.7rem; color: var(--faint); margin-top: 0.2rem; }}
+.task .w {{ color: var(--dim); font-size: 0.83rem; line-height: 1.55; }}
+.task .m {{ font-family: var(--mono); font-size: 0.66rem; color: var(--ghost); }}
 
-/* ── sidebar ──────────────────────────────────────────────── */
-/* the section heading is a page-level size; in a 262px rail it has to come down */
-section[data-testid="stSidebar"] .lbl {{
-  font-size: 0.78rem; font-weight: 600; color: var(--faint);
-  text-transform: uppercase; letter-spacing: 0.08em; margin: 1.3rem 0 0.5rem 0;
+/* ═══ streamlit widgets ════════════════════════════════════════════════════ */
+[data-testid="stChatInput"] {{
+  background: var(--surface) !important;
+  border: 1px solid var(--line-2) !important;
+  border-radius: var(--r) !important;
+  box-shadow: 0 4px 20px rgba(28,26,23,0.08) !important;
 }}
-section[data-testid="stSidebar"] .chip {{ font-size: 0.68rem; padding: 0.22rem 0.5rem; }}
-.sb-mark {{
-  font-size: 1.2rem; font-weight: 800; letter-spacing: -0.03em;
-  background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent;
+[data-testid="stChatInput"]:focus-within {{
+  border-color: var(--accent) !important; box-shadow: 0 0 0 3px rgba(15,118,110,0.1) !important;
 }}
-.sb-sub {{ color: var(--faint); font-size: 0.72rem; margin-bottom: 0.5rem; }}
-.hist-m {{ color: var(--faint); font-size: 0.7rem; font-family: var(--mono); margin: -0.3rem 0 0.6rem 0.2rem; }}
-
-/* ── streamlit widgets, pulled into the language ──────────── */
-.stTextInput input {{
-  background: rgba(255,255,255,0.045) !important; border: 1px solid var(--line-2) !important;
-  color: var(--text) !important; font-size: 0.95rem !important; font-family: var(--sans) !important;
-  border-radius: 13px !important; padding: 0.8rem 1rem !important;
+[data-testid="stChatInput"] textarea {{
+  color: var(--text) !important; font-size: 0.9rem !important; font-family: var(--sans) !important;
 }}
-.stTextInput input:focus {{
-  border-color: var(--accent) !important;
-  box-shadow: 0 0 0 4px rgba(129,140,248,0.16) !important;
-}}
-.stTextInput input::placeholder {{ color: var(--faint) !important; }}
-[data-testid="stForm"] {{ padding: 0.85rem 0.9rem !important; }}
-[data-testid="stForm"] [data-testid="stHorizontalBlock"] {{ align-items: flex-end; gap: 0.6rem; }}
-
-.stButton > button, [data-testid="stBaseButton-secondary"] {{
-  font-family: var(--sans) !important; font-size: 0.82rem !important; font-weight: 550 !important;
-  border-radius: 11px !important; padding: 0.6rem 0.9rem !important;
-  border: 1px solid var(--line-2) !important; background: var(--glass-2) !important;
-  color: var(--dim) !important; transition: all 180ms ease !important; min-height: 0 !important;
-  backdrop-filter: blur(10px);
-}}
-.stButton > button:hover, [data-testid="stBaseButton-secondary"]:hover {{
-  border-color: rgba(129,140,248,0.5) !important; color: var(--text) !important;
-  background: var(--grad-soft) !important; transform: translateY(-2px);
-}}
-/* streamlit names the form's submit button primaryFormSubmit, not primary */
-button[kind="primary"], button[kind="primaryFormSubmit"],
-[data-testid="stBaseButton-primary"], [data-testid="stBaseButton-primaryFormSubmit"] {{
-  font-family: var(--sans) !important; font-size: 0.9rem !important; font-weight: 650 !important;
-  border-radius: 13px !important; padding: 0.82rem 1.5rem !important; border: none !important;
-  background: var(--grad) !important; background-size: 200% auto !important; color: #0b0b14 !important;
-  box-shadow: 0 8px 26px rgba(129,140,248,0.42) !important; transition: all 220ms ease !important;
-}}
-button[kind="primary"]:hover, button[kind="primaryFormSubmit"]:hover,
-[data-testid="stBaseButton-primary"]:hover, [data-testid="stBaseButton-primaryFormSubmit"]:hover {{
-  transform: translateY(-2px); box-shadow: 0 12px 34px rgba(129,140,248,0.55) !important;
-  animation: shimmer 1.6s linear infinite;
-}}
-/* the label sits in a nested div that otherwise keeps the page font size and colour */
-.stButton button *, [data-testid^="stBaseButton"] * {{
-  font-size: inherit !important; font-family: inherit !important; color: inherit !important;
-  font-weight: inherit !important;
-}}
-.stDownloadButton > button {{
-  font-family: var(--sans) !important; font-size: 0.8rem !important;
-  border-radius: 11px !important; border: 1px solid var(--line-2) !important;
-  background: var(--glass-2) !important; color: var(--dim) !important;
+[data-testid="stChatInput"] textarea::placeholder {{ color: var(--ghost) !important; }}
+[data-testid="stBottomBlockContainer"] {{
+  background: linear-gradient(180deg, transparent, var(--bg) 30%) !important;
+  padding-bottom: 1.2rem; max-width: 1040px; margin: 0 auto;
 }}
 
-[data-testid="stTabs"] [data-baseweb="tab-list"] {{
-  gap: 0.35rem; border-bottom: 1px solid var(--line); padding-bottom: 0.15rem;
+.stButton > button, .stDownloadButton > button {{
+  background: var(--surface) !important;
+  border: 1px solid var(--line-2) !important;
+  color: var(--dim) !important;
+  border-radius: var(--r-sm) !important;
+  font-size: 0.77rem !important; font-weight: 600 !important;
+  padding: 0.4rem 0.85rem !important; min-height: 0 !important;
+  box-shadow: var(--lift) !important;
+  transition: all var(--ease) !important;
 }}
-[data-testid="stTabs"] button {{
-  font-family: var(--sans) !important; font-size: 0.86rem !important; font-weight: 550 !important;
-  color: var(--faint) !important; padding: 0.55rem 0.95rem !important; border-radius: 11px 11px 0 0;
+.stButton > button:hover, .stDownloadButton > button:hover {{
+  border-color: var(--accent) !important; color: var(--accent) !important;
+  background: var(--accent-soft) !important;
 }}
-[data-testid="stTabs"] button:hover {{ color: var(--dim) !important; background: rgba(255,255,255,0.03); }}
-[data-testid="stTabs"] button[aria-selected="true"] {{ color: var(--accent) !important; }}
-[data-testid="stTabs"] [data-baseweb="tab-highlight"] {{ background: var(--grad) !important; height: 2px; }}
+.stButton > button:focus-visible, .stDownloadButton > button:focus-visible {{
+  outline: 2px solid var(--accent) !important; outline-offset: 1px !important;
+}}
+button[kind="primary"], [data-testid="stBaseButton-primary"] {{
+  background: var(--accent) !important; border-color: var(--accent) !important;
+  color: #ffffff !important;
+}}
+button[kind="primary"]:hover, [data-testid="stBaseButton-primary"]:hover {{
+  background: #0b5f58 !important; color: #ffffff !important;
+}}
 
-[data-testid="stExpander"] details {{ border-radius: 14px !important; }}
-[data-testid="stExpander"] summary {{ font-size: 0.85rem; font-weight: 550; color: var(--dim); }}
-[data-testid="stCaptionContainer"] {{ color: var(--faint) !important; font-size: 0.78rem !important; }}
-[data-testid="stProgress"] > div > div > div {{ background: var(--grad) !important; }}
-[data-testid="stAlert"] {{ border-radius: 13px !important; backdrop-filter: blur(12px); }}
-code {{ font-family: var(--mono) !important; font-size: 0.78rem !important; color: var(--accent) !important; }}
+.stTabs [data-baseweb="tab-list"] {{
+  gap: 0.1rem; border-bottom: 1px solid var(--line); margin-bottom: 0.6rem;
+}}
+.stTabs [data-baseweb="tab"] {{
+  font-family: var(--mono); font-size: 0.69rem !important; letter-spacing: 0.11em;
+  text-transform: uppercase; color: var(--ghost); padding: 0.55rem 0.9rem;
+  transition: color var(--ease);
+}}
+.stTabs [data-baseweb="tab"]:hover {{ color: var(--dim); }}
+.stTabs [aria-selected="true"] {{ color: var(--accent) !important; }}
+.stTabs [data-baseweb="tab-highlight"] {{ background: var(--accent) !important; height: 2px; }}
+.stTabs [data-baseweb="tab-border"] {{ display: none; }}
+
+[data-testid="stExpander"] details {{
+  background: var(--surface) !important; border: 1px solid var(--line) !important;
+  border-radius: var(--r) !important; box-shadow: var(--lift);
+}}
+[data-testid="stExpander"] summary {{ font-size: 0.79rem; color: var(--dim); }}
+[data-testid="stCaptionContainer"] p {{
+  font-size: 0.68rem !important; color: var(--ghost) !important;
+  font-family: var(--mono); letter-spacing: 0.04em;
+}}
+/* anchored on the track's own testid: `.stProgress > div > div` also matched the label's
+   markdown wrapper and clamped the status text to 3px, so it overlapped the block below */
+[data-testid="stProgressBarTrack"] {{
+  background: var(--surface-3) !important; height: 3px !important; border-radius: 999px;
+}}
+[data-testid="stProgressBarTrack"] > div {{ background: var(--accent) !important; }}
+[data-testid="stProgress"] [data-testid="stMarkdownContainer"] p {{
+  font-family: var(--mono); font-size: 0.7rem !important; color: var(--faint) !important;
+  letter-spacing: 0.04em; line-height: 1.7;
+}}
+[data-testid="stAlert"] {{
+  border-radius: var(--r) !important; font-size: 0.8rem;
+  background: var(--surface) !important; border: 1px solid var(--line) !important;
+  box-shadow: var(--lift);
+}}
+[data-testid="stJson"] {{
+  background: var(--surface-2) !important; border: 1px solid var(--line) !important;
+  border-radius: var(--r) !important;
+}}
+
+/* charts sit on their own ground, which reads as a hole unless it is filled */
+[data-testid="stVegaLiteChart"], [data-testid="stArrowVegaLiteChart"] {{
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r);
+  padding: 0.65rem 0.45rem 0.25rem; box-shadow: var(--lift);
+}}
+
 ::-webkit-scrollbar {{ width: 9px; height: 9px; }}
 ::-webkit-scrollbar-track {{ background: transparent; }}
-::-webkit-scrollbar-thumb {{ background: rgba(255,255,255,0.12); border-radius: 999px; }}
-::-webkit-scrollbar-thumb:hover {{ background: rgba(255,255,255,0.2); }}
+::-webkit-scrollbar-thumb {{ background: var(--line-2); border-radius: 5px; }}
+::-webkit-scrollbar-thumb:hover {{ background: var(--faint); }}
+
+@media (max-width: 820px) {{
+  .stats, .agents {{ grid-template-columns: repeat(2, 1fr); }}
+  .hero {{ padding: 2rem 0 1rem; }}
+  .stMain .block-container {{ padding: 0 1rem 8rem; }}
+}}
 </style>
 """
 
 
 def inject_css() -> None:
-    """Write the token sheet into the page. Safe to call on every rerun."""
+    """Safe to call on every rerun — Streamlit replaces the block rather than stacking it."""
     st.markdown(_CSS, unsafe_allow_html=True)
 
 
-def badge_class(score: float, good_floor: float) -> str:
-    """good / warn / bad. good_floor is the critic's approval threshold, not a UI constant."""
-    if score >= good_floor:
+def wordmark(extra: str = "") -> str:
+    """The product name as one piece of markup, so the masthead and sidebar cannot drift."""
+    return (
+        f'<span class="wordmark {extra}"><span class="dotmark"></span>'
+        f"AMA<span class='ris'>RIS</span></span>"
+    )
+
+
+def badge_class(value: float, floor: float) -> str:
+    """good / warn / bad for a score. The good floor is the caller's, never hard-coded here."""
+    if value >= floor:
         return "good"
-    return "warn" if score >= WARN_FLOOR else "bad"
+    return "warn" if value >= WARN_FLOOR else "bad"

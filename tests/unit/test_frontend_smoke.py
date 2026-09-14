@@ -15,17 +15,25 @@ APP = str(Path(__file__).resolve().parents[2] / "frontend" / "app.py")
 def test_the_app_renders_without_raising() -> None:
     app = streamlit_testing.AppTest.from_file(APP, default_timeout=30).run()
     assert not app.exception, [e.value for e in app.exception]
-    assert any("AMARIS" in block.value for block in app.markdown)
-    # example-query chips sit after the submit button, so find it by label not position
-    assert any(button.label == "run" for button in app.button)
+    # the wordmark is split so the second half can take the accent colour
+    assert any("AMA" in block.value and "RIS" in block.value for block in app.markdown)
+    # the composer is a chat input pinned to the bottom, not a form with a run button
+    assert app.chat_input
 
 
-def test_the_landing_page_explains_the_system_instead_of_sitting_blank() -> None:
-    """An empty state that teaches is the point — a reviewer arrives knowing nothing."""
+def test_the_empty_state_is_the_mark_the_numbers_and_the_agents() -> None:
+    """The routing transcript, depth table and GraphState list were removed — they explained
+    the system in prose. The stat strip and agent grid stayed, because they show it."""
     app = streamlit_testing.AppTest.from_file(APP, default_timeout=30).run()
-    drawn = "".join(block.value for block in app.markdown)
-    assert "supervisor" in drawn
-    assert "agentic" in drawn.lower()
+    drawn = "".join(b.value for b in app.markdown if "<style>" not in b.value)
+
+    assert 'class="hero"' in drawn
+    assert 'class="tagline"' in drawn
+    assert 'class="stats"' in drawn
+    assert 'class="agents"' in drawn
+    # the supervisor card is marked because deciding is its whole job
+    assert 'class="agent core"' in drawn
+    assert 'class="trace"' not in drawn
 
 
 def test_no_run_output_is_rendered_before_a_query_is_submitted() -> None:
@@ -38,9 +46,13 @@ def test_no_run_output_is_rendered_before_a_query_is_submitted() -> None:
     assert 'class="runbar' not in drawn
 
 
-def test_clicking_an_example_fills_the_query_box() -> None:
+def test_the_empty_state_carries_no_example_chips_or_explainer_paragraph() -> None:
+    """Both were removed deliberately: the headline and the grids below do that job."""
     app = streamlit_testing.AppTest.from_file(APP, default_timeout=30).run()
-    example = next(b for b in app.button if b.label == "mcp")
-    example.click().run()
-    assert not app.exception, [e.value for e in app.exception]
-    assert "Model Context Protocol" in app.text_input[0].value
+    drawn = "".join(b.value for b in app.markdown if "<style>" not in b.value)
+
+    assert not any(b.label in ("mcp", "langgraph vs crewai") for b in app.button)
+    assert 'class="lede"' not in drawn
+    # the wordmark and its one line are what remain
+    assert "AMA" in drawn and "RIS" in drawn
+    assert "show every decision" in drawn

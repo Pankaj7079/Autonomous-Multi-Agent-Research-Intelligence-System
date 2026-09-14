@@ -6,7 +6,8 @@ import re
 from typing import TYPE_CHECKING, Any
 
 from amaris.agents.base_agent import BaseAgent
-from amaris.agents.triage import budget_for
+from amaris.agents.triage import budget_for, format_history
+from amaris.graph.state import subject
 from amaris.observability.logging import logger
 from amaris.tools.relevance import select_for_prompt
 
@@ -15,10 +16,14 @@ if TYPE_CHECKING:
 
 SOURCE_CHARS = 500
 
-# gpt-oss reaches for fullwidth brackets when citing, which no [n] matcher downstream finds
-_CITATION_MARKER = re.compile(r"[【\[]\s*(\d+)\s*[】\]]")
+# gpt-oss reaches for fullwidth brackets when citing, which no [n] matcher downstream finds.
+# it also tags them — 【1†source】 — so anything after the digits inside the pair is dropped
+_CITATION_MARKER = re.compile(r"[【\[]\s*(\d+)\s*(?:†[^】\]]*)?[】\]]")
+# the same model emits 【—】 and 【†source】 with no number at all; they cite nothing, so they go
+_EMPTY_MARKER = re.compile(r"【[^】\d]*】")
 
-PROMPT = """You are a senior research writer. Use only the provided research and analysis.
+PROMPT = """You are a senior research analyst writing up findings for a reader who is
+technical, busy, and will check your sources. Use only the provided research and analysis.
 
 Open with this heading and nothing before it:
 
@@ -27,21 +32,35 @@ Open with this heading and nothing before it:
 Under it, answer the question in 1-3 sentences. Plainly, in the first breath, the
 way you would answer a colleague who asked. No throat-clearing, no restating the
 question, no "this report examines". If the research does not actually answer the
-question, say so in that first line and say what is missing — do not fill the space
-with adjacent facts.
+question, say so in that first line, say what the sources DO establish, and say
+exactly what is missing — do not fill the space with adjacent facts.
 
 Then, and only then, use exactly these headings:
 {sections}
 
+{length_rule}
+
+What makes this a research write-up rather than a summary:
+  - Be specific. Named entities, figures, dates, versions, quantities. A sentence
+    that would still read as true if you swapped the subject for something else is
+    filler — delete it.
+  - Say where sources disagree, and which is better supported. Agreement between
+    two sources is worth stating; silence from all of them is worth stating too.
+  - Every section must carry something the sections above it did not. If a heading
+    has nothing behind it in the research, write one line saying the sources do not
+    cover it rather than padding it out.
+  - Separate what the sources establish from what you are inferring, and mark the
+    inference as an inference.
+
 Rules:
-  - about {word_target} words in total, and shorter is better than padded
   - every factual claim gets an inline citation [1], [2]
   - no claim without a source; flag uncertainty explicitly
   - active voice: "researchers found" not "it was found that"
+  - build on what an earlier turn already answered, never restate it
   - end with ## References listing only the sources you actually cited
 
 {revision_block}
-
+{history}
 Question: {query}
 
 Analysis:
@@ -49,6 +68,77 @@ Analysis:
 
 Numbered sources — cite only the numbers that support a claim you make:
 {sources}"""
+
+# the length instruction is the one thing that has to change with depth: the same
+# "shorter is better" line that keeps a direct answer tight is also what made
+# "explain in detail" come back just as short as the answer it was expanding
+SHORT_RULE = """Length: about {words} words. Shorter is better than padded — stop when
+the question is answered rather than filling the space."""
+
+LONG_RULE = """Length: about {words} words, and this one was asked in depth on purpose,
+so develop it. A reader who asked for detail and got four lines was not served. Give
+each heading real substance: the evidence behind the claim, the figures, the
+disagreements, the caveats. Do not pad to reach the count — but do not stop at a
+summary either, because a summary is what they already had."""
+
+# above this target the reader asked for a report, not an answer
+LONG_FROM_WORDS = 500
+
+_MARKER = re.compile(r"\[(\d+)\]")
+# the model's own reference list is dropped and rebuilt — it numbered entries correctly but
+# listed them in whatever order it wrote them, so a remapped report read [2] [1] [3]
+_REFERENCES = re.compile(r"\n#{1,6}\s*references\b.*", re.IGNORECASE | re.DOTALL)
+
+
+def _normalise_markers(report: str) -> str:
+    """Every citation as [n], and numberless fullwidth markers removed."""
+    return _EMPTY_MARKER.sub("", _CITATION_MARKER.sub(lambda m: f"[{m.group(1)}]", report))
+
+
+def _renumber(report: str, citations: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]]]:
+    """Renumber citations to 1..N in order of first use and rebuild the reference list.
+
+    Returns the rewritten report and only the citations actually cited. A report that cited
+    nothing keeps its text and loses its citations, because none of them were used.
+    """
+    by_index = {item["index"]: item for item in citations}
+    body = _REFERENCES.sub("", report).rstrip()
+
+    # order comes from the body alone: a reference the model listed but never cited inline
+    # must not earn a number
+    order: list[int] = []
+    for found in _MARKER.finditer(body):
+        number = int(found.group(1))
+        if number in by_index and number not in order:
+            order.append(number)
+    if not order:
+        return body, []
+
+    remap = {old: new for new, old in enumerate(order, start=1)}
+    # unknown numbers are left alone: dropping them would silently delete a claim's only marker
+    rewritten = _MARKER.sub(
+        lambda m: f"[{remap[int(m.group(1))]}]" if int(m.group(1)) in remap else m.group(0),
+        body,
+    )
+    kept = sorted(
+        ({**by_index[old], "index": new} for old, new in remap.items()),
+        key=lambda item: item["index"],
+    )
+    return f"{rewritten}\n\n{_reference_block(kept)}", kept
+
+
+def _reference_block(citations: list[dict[str, Any]]) -> str:
+    """Generated, not trusted — every line is a source the report actually cited, in order.
+
+    Joined with a markdown hard break, or a renderer collapses the single newlines and every
+    reference runs together into one paragraph.
+    """
+    lines = "  \n".join(
+        f"[{item['index']}] {item['title']}" + (f" — {item['url']}" if item["url"] else "")
+        for item in citations
+    )
+    return f"## References\n\n{lines}"
+
 
 REVISION_BLOCK = """This is revision {n}. The critic said:
 {critic_feedback}
@@ -65,16 +155,19 @@ class WriterAgent(BaseAgent):
     async def _run(self, state: GraphState) -> dict[str, Any]:
         selected = self._select(state)
         citations = self._build_citations(selected)
+        words = state["word_target"] or budget_for(state["query_depth"]).word_target
         prompt = PROMPT.format(
             sections=self._sections(state),
-            word_target=state["word_target"] or budget_for(state["query_depth"]).word_target,
+            length_rule=self._length_rule(words),
             revision_block=self._revision_block(state),
+            history=format_history(state.get("history", [])),
             query=state["original_query"],
             analysis=state["analyzed_data"] or "no separate analysis was produced",
             sources=self._format_sources(selected, citations),
         )
 
-        report = _CITATION_MARKER.sub(lambda m: f"[{m.group(1)}]", await self._invoke(prompt))
+        report = _normalise_markers(await self._invoke(prompt))
+        report, citations = _renumber(report, citations)
         logger.bind(
             chars=len(report),
             citations=len(citations),
@@ -91,11 +184,16 @@ class WriterAgent(BaseAgent):
 
     def _select(self, state: GraphState) -> list[dict[str, Any]]:
         return select_for_prompt(
-            state["original_query"],
+            subject(state),
             state["raw_research"],
             self.settings.max_sources_in_prompt,
             self.settings.relevance_floor,
         )
+
+    def _length_rule(self, words: int) -> str:
+        """Brevity and depth need opposite instructions, so the target picks which one ships."""
+        rule = LONG_RULE if words >= LONG_FROM_WORDS else SHORT_RULE
+        return rule.format(words=words)
 
     def _sections(self, state: GraphState) -> str:
         """Headings after ## Answer. A short question does not get a six-part academic template."""

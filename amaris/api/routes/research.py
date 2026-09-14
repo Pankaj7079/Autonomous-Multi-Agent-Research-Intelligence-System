@@ -52,14 +52,16 @@ async def _publish(store: JobStore, job_id: str, event: ProgressEvent) -> None:
         await store.publish_progress(job_id, event.model_dump())
 
 
-async def _run_job(job_id: str, query: str, session_id: str) -> None:
+async def _run_job(
+    job_id: str, query: str, session_id: str, seed: dict[str, Any] | None = None
+) -> None:
     """Drive the pipeline and mirror every node transition into the job store."""
     store = await get_job_store()
     pct = 0
     started = time.perf_counter()
     final: GraphState | None = None
     try:
-        async for node, delta, state in stream_research(query, session_id=session_id):
+        async for node, delta, state in stream_research(query, session_id=session_id, seed=seed):
             final = state
             event = build_progress_event(node, delta, pct, elapsed_s=time.perf_counter() - started)
             pct = event.progress_pct
@@ -98,9 +100,9 @@ async def _run_job(job_id: str, query: str, session_id: str) -> None:
         logger.bind(job_id=job_id, error=str(exc)[:200]).exception("api.job_failed")
 
 
-def _spawn(job_id: str, query: str, session_id: str) -> None:
+def _spawn(job_id: str, query: str, session_id: str, seed: dict[str, Any] | None = None) -> None:
     """Fire the run off the request thread and keep it referenced until it ends."""
-    task = asyncio.create_task(_run_job(job_id, query, session_id))
+    task = asyncio.create_task(_run_job(job_id, query, session_id, seed))
     _running.add(task)
     task.add_done_callback(_running.discard)
 
@@ -118,7 +120,7 @@ async def start_research(request: ResearchRequest) -> ResearchAccepted:
     store = await get_job_store()
     await store.create_job(job_id, guard.text)
     await store.update_job(job_id, session_id=session_id)
-    _spawn(job_id, guard.text, session_id)
+    _spawn(job_id, guard.text, session_id, request.seed())
 
     logger.bind(job_id=job_id, session_id=session_id, query=guard.text[:120]).info("api.job_queued")
     return ResearchAccepted(job_id=job_id, session_id=session_id)

@@ -339,9 +339,9 @@ def _result(**overrides):
     base = {
         "report": "# body",
         "citations": [],
-        "scores": {"overall": 0.81},
+        "scores": {},
         "agent_path": ["planner"],
-        "trace": _trace(),
+        "trace": _trace(quality_score=0.81),
     }
     return ResearchResult(**{**base, **overrides})
 
@@ -355,9 +355,24 @@ def test_an_approved_run_reads_as_approved(fake: FakeStreamlit) -> None:
 
 def test_a_run_below_the_floor_does_not_claim_approval(fake: FakeStreamlit) -> None:
     """0.55 is under the 0.72 approve floor — calling that approved would be a lie."""
-    components.verdict_banner(_result(scores={"overall": 0.55}), None)
+    components.verdict_banner(_result(trace=_trace(quality_score=0.55)), None)
     assert "verdict warn" in fake.drawn
     assert "below the approval floor" in fake.drawn.lower()
+
+
+def test_the_banner_reads_the_shape_result_from_state_actually_produces(
+    fake: FakeStreamlit, state
+) -> None:
+    """The old fixture hand-built scores={"overall": ...}, a key result_from_state never emits."""
+    from amaris.api.schemas import result_from_state
+
+    state["quality_score"] = 0.78
+    state["critic_scores"] = {"answer_fit": 0.8}
+    state["draft_report"] = "## Answer\nyes."
+    components.verdict_banner(result_from_state(state), None)
+
+    assert "verdict good" in fake.drawn
+    assert "0.78" in fake.drawn
 
 
 def test_a_failed_run_shows_the_error(fake: FakeStreamlit) -> None:

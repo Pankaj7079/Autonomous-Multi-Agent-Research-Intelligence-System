@@ -7,7 +7,8 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from amaris.agents.base_agent import BaseAgent
-from amaris.graph.state import APPROVE, FIX_WRITING, NEED_MORE_RESEARCH, WRONG_TOPIC
+from amaris.agents.writer import SOURCE_CHARS as WRITER_SOURCE_CHARS
+from amaris.graph.state import APPROVE, FIX_WRITING, NEED_MORE_RESEARCH, WRONG_TOPIC, subject
 from amaris.observability.logging import logger
 from amaris.tools.relevance import select_for_prompt
 
@@ -19,7 +20,9 @@ if TYPE_CHECKING:
 DIMENSIONS = ("answer_fit", "faithfulness", "completeness", "coherence", "citation_quality")
 VALID_HINTS = (NEED_MORE_RESEARCH, FIX_WRITING, WRONG_TOPIC, APPROVE)
 REPORT_CHARS = 6000
-SOURCE_CHARS = 300
+# never below the writer's own cut, or the critic marks claims unfaithful that it simply
+# cannot see the evidence for — found live, scoring an accurate report 0.2 on faithfulness
+SOURCE_CHARS = WRITER_SOURCE_CHARS
 # below this the report is not a weaker answer to the question, it is an answer to another one
 ANSWER_FIT_FLOOR = 0.5
 
@@ -117,7 +120,7 @@ class CriticAgent(BaseAgent):
         from amaris.safety.injection import wrap_untrusted
 
         selected = select_for_prompt(
-            state["original_query"],
+            subject(state),
             state["raw_research"],
             self.settings.max_sources_in_prompt,
             self.settings.relevance_floor,

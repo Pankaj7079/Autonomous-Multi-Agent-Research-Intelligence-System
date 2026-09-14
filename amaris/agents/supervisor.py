@@ -140,11 +140,13 @@ class SupervisorAgent(BaseAgent):
         last = state["agent_path"][-1] if state["agent_path"] else ""
         return REVIEW_GATE if last == "critic" else RESEARCH_GATE
 
+    def _revision_cap(self, state: GraphState) -> int:
+        """Depth-scaled. A brief answer does not earn the same rewrite budget as a deep one."""
+        return min(self.settings.max_revisions, budget_for(state["query_depth"]).max_revisions)
+
     def _terminal_reason(self, state: GraphState) -> str | None:
-        """Conditions where code decides, not the LLM — an LLM must not guard a billing loop."""
-        if state.get("error"):
-            return "error_set"
-        if state["revision_count"] >= self.settings.max_revisions:
+        """Caps where code decides, not the LLM — an LLM must not guard a billing loop."""
+        if state["revision_count"] >= self._revision_cap(state):
             return "revision_cap"
         if len(state["agent_path"]) >= self.settings.max_supervisor_steps:
             return "step_cap"
@@ -226,7 +228,7 @@ class SupervisorAgent(BaseAgent):
             answer_fit=state["critic_scores"].get("answer_fit", "not scored"),
             top_issue=state["top_issue"] or "none stated",
             revision_count=snapshot["revision_count"],
-            max_revisions=self.settings.max_revisions,
+            max_revisions=self._revision_cap(state),
         )
 
     def _top_titles(self, state: GraphState) -> str:
@@ -280,18 +282,26 @@ class SupervisorAgent(BaseAgent):
             snapshot["quality_score"],
             snapshot["revision_count"],
             self.settings.quality_approve_threshold,
-            self.settings.max_revisions,
+            self._revision_cap(state),
         )
 
     async def _run(self, state: GraphState) -> dict[str, Any]:
         snapshot = self._snapshot(state)
         gate = self._gate(state)
 
+        if state.get("error"):
+            return self._decide(state, gate, snapshot, FINISH, "error_set", llm_decided=False)
+
+        settled = self._settled(state, gate, snapshot)
+        # a run that cleared the floor is approved even when it also hit the revision cap —
+        # checking the cap first labelled a passing 0.78 run as having given up
+        if settled and settled[0] == FINISH:
+            return self._decide(state, gate, snapshot, FINISH, settled[1], llm_decided=False)
+
         reason = self._terminal_reason(state)
         if reason:
             return self._decide(state, gate, snapshot, FINISH, reason, llm_decided=False)
 
-        settled = self._settled(state, gate, snapshot)
         if settled:
             chosen, rule = settled
             return self._decide(state, gate, snapshot, chosen, rule, llm_decided=False)
