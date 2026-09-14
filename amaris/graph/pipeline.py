@@ -68,8 +68,37 @@ async def _build_checkpointer() -> Any:
     connection = await aiosqlite.connect(path)
     saver = AsyncSqliteSaver(connection)
     await saver.setup()
+    await _prune_checkpoints(connection)
     logger.bind(db=path).debug("pipeline.checkpointer_ready")
     return saver
+
+
+async def _prune_checkpoints(connection: Any) -> None:
+    """Keep only the newest N threads. Checkpoints exist to resume a crashed run, so a
+    finished run from last week is dead weight — and nothing ever deleted it: 79 runs had
+    grown the file to 14MB, which on a container is a volume that fills up silently.
+    """
+    keep = get_settings().checkpoint_keep_threads
+    try:
+        cursor = await connection.execute(
+            "SELECT thread_id FROM checkpoints GROUP BY thread_id "
+            "ORDER BY MAX(rowid) DESC LIMIT -1 OFFSET ?",
+            (keep,),
+        )
+        stale = [row[0] for row in await cursor.fetchall()]
+        if not stale:
+            return
+
+        # one thread at a time with fixed statements: pruning is rare and a handful of
+        # deletes is not worth building sql strings for
+        for thread_id in stale:
+            await connection.execute("DELETE FROM writes WHERE thread_id = ?", (thread_id,))
+            await connection.execute("DELETE FROM checkpoints WHERE thread_id = ?", (thread_id,))
+        await connection.commit()
+        logger.bind(pruned=len(stale), kept=keep).info("pipeline.checkpoints_pruned")
+    except Exception as exc:
+        # a run must never fail to start because housekeeping did
+        logger.bind(error=str(exc)[:200]).warning("pipeline.prune_failed")
 
 
 async def get_pipeline() -> CompiledStateGraph:

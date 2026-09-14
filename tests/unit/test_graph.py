@@ -204,3 +204,43 @@ async def test_a_nan_metric_is_omitted_rather_than_stored_as_zero(
     assert "faithfulness" not in scores, "an unscored metric must be absent, not zero"
     assert scores["context_precision"] == 1.0
     assert scores["answer_relevancy"] == 0.85
+
+
+async def test_checkpoint_pruning_keeps_only_recent_threads(tmp_path, monkeypatch) -> None:
+    """Nothing ever deleted checkpoints: 79 runs had grown the file to 14MB. They exist to
+    resume a crashed run, so finished ones from last week are dead weight."""
+    import aiosqlite
+
+    from amaris.config.settings import get_settings
+    from amaris.graph.pipeline import _prune_checkpoints
+
+    get_settings.cache_clear()
+    monkeypatch.setenv("CHECKPOINT_KEEP_THREADS", "2")
+
+    db = tmp_path / "ckpt.db"
+    async with aiosqlite.connect(db) as conn:
+        await conn.execute("CREATE TABLE checkpoints (thread_id TEXT)")
+        await conn.execute("CREATE TABLE writes (thread_id TEXT)")
+        for thread in ("old1", "old2", "keep1", "keep2"):
+            await conn.execute("INSERT INTO checkpoints VALUES (?)", (thread,))
+            await conn.execute("INSERT INTO writes VALUES (?)", (thread,))
+        await conn.commit()
+
+        await _prune_checkpoints(conn)
+
+        cursor = await conn.execute("SELECT DISTINCT thread_id FROM checkpoints")
+        remaining = {row[0] for row in await cursor.fetchall()}
+
+    assert remaining == {"keep1", "keep2"}
+    get_settings.cache_clear()
+
+
+async def test_a_prune_failure_never_stops_a_run_from_starting(tmp_path) -> None:
+    """Housekeeping is not worth failing a research run over."""
+    import aiosqlite
+
+    from amaris.graph.pipeline import _prune_checkpoints
+
+    async with aiosqlite.connect(tmp_path / "empty.db") as conn:
+        # no checkpoints table at all — must be swallowed, not raised
+        await _prune_checkpoints(conn)

@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict
 from amaris.agents.base_agent import AgentError, BaseAgent
 from amaris.agents.triage import budget_for
 from amaris.graph.state import subject
-from amaris.memory.mem0_memory import add_research_finding, recall_related
+from amaris.memory.episodic import add_research_finding, recall_related
 from amaris.observability.logging import logger
 from amaris.safety.injection import UNTRUSTED_NOTICE, wrap_untrusted
 from amaris.tools.relevance import mean_relevance, score_source
@@ -236,11 +236,16 @@ class ResearcherAgent(BaseAgent):
 
         from amaris.tools.vector_tool import search_knowledge_base
 
-        session_id = state["session_id"]
+        # filtered by url, not session: the file was ingested under the conversation's id and
+        # this run has its own, so a session filter here matches nothing
+        urls = [str(item.get("url", "")) for item in attachments if item.get("url")]
+        if not urls:
+            return []
+
         top_k = self.settings.attachment_top_k
         queries = [str(task.get("description", "")) for task in tasks] or [subject(state)]
         results = await asyncio.gather(
-            *(search_knowledge_base(q, limit=top_k, session_id=session_id) for q in queries),
+            *(search_knowledge_base(q, limit=top_k, urls=urls) for q in queries),
             return_exceptions=True,
         )
 

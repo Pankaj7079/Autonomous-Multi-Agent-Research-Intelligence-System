@@ -59,6 +59,9 @@ class Settings(BaseSettings):
     qdrant_api_key: SecretStr | None = None
 
     sqlite_checkpoint_db: str = "./amaris_checkpoints.db"
+    # checkpoints resume a crashed run, so only recent threads are worth keeping — nothing
+    # pruned them before and the file grew ~176KB per run forever
+    checkpoint_keep_threads: int = Field(default=50, ge=1)
 
     # bounds only — the cross-field check (research < approve) belongs to Tier 1 patch 3
     max_revisions: int = Field(default=2, ge=1)
@@ -68,8 +71,10 @@ class Settings(BaseSettings):
     research_quality_threshold: float = Field(default=0.60, ge=0.0, le=1.0)
     quality_approve_threshold: float = Field(default=0.72, ge=0.0, le=1.0)
 
-    # how many sources any agent prompt may carry; the researcher's cap never exceeds it
-    max_sources_in_prompt: int = Field(default=12, ge=1)
+    # how many sources any agent prompt may carry; the researcher's cap never exceeds it.
+    # 20 so the deep budget can actually use its headroom — at 12 this silently clamped it
+    # back down to the standard budget and deep read no more than standard did
+    max_sources_in_prompt: int = Field(default=20, ge=1)
     # browsers and search apis both throttle, so tasks fan out but not without bound
     max_concurrent_research_tasks: int = Field(default=3, ge=1)
     # 0.35 drops a source that matched only half the query and only in its body text —
@@ -79,12 +84,30 @@ class Settings(BaseSettings):
     # attachments: extraction is capped so one upload cannot blow up every downstream prompt
     attachment_max_bytes: int = Field(default=10_000_000, ge=1)
     attachment_max_pages: int = Field(default=40, ge=1)
+    # a scan costs a render plus an OCR pass per page, so it gets a tighter ceiling
+    attachment_max_scan_pages: int = Field(default=10, ge=1)
+    # 2x render is the point where OCR stops mangling 10pt body text
+    attachment_scan_scale: float = Field(default=2.0, ge=1.0, le=4.0)
     attachment_max_chars: int = Field(default=120_000, ge=1_000)
     # ~1200 chars keeps a chunk inside bge-small's 512-token window with room to spare
     attachment_chunk_chars: int = Field(default=1_200, ge=200)
     attachment_chunk_overlap: int = Field(default=150, ge=0)
     # how many document chunks the researcher may pull back per task
     attachment_top_k: int = Field(default=4, ge=1)
+
+    # speech input — groq serves whisper on the same free key, so there is no local model
+    stt_model: str = "whisper-large-v3-turbo"
+    stt_max_bytes: int = Field(default=25_000_000, ge=1)
+    # below this there is no speech in the file, only a mis-tap on the mic button
+    stt_min_bytes: int = Field(default=2_000, ge=0)
+
+    # emailing a report — resend speaks plain http, so httpx covers it and there is no new dep
+    resend_api_key: SecretStr | None = None
+    email_from: str = "AMARIS <onboarding@resend.dev>"
+    # empty means any recipient. a public demo that mails anywhere is an open relay, so cloud
+    # mode refuses to send until this names the domains it is allowed to reach
+    email_allowed_domains: list[str] = Field(default_factory=list)
+    email_max_per_session: int = Field(default=5, ge=1)
 
     # groq's tokens-per-minute window is ~60s, so a shorter retry budget can never recover from it
     llm_retry_budget_seconds: float = Field(default=75.0, ge=0.0)

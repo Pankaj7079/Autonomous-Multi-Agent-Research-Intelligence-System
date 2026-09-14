@@ -66,11 +66,11 @@ def test_equal_thresholds_are_also_rejected(settings) -> None:
 
 
 def test_cloud_without_qdrant_warns_rather_than_fails(settings) -> None:
-    """mem0 no-ops without Qdrant — degraded, not broken, so it must not block startup."""
+    """Long-term memory no-ops without Qdrant — degraded, not broken, so it must not block startup."""
     settings(groq_api_key="gsk_test", gemini_api_key="g_test", deployment_mode="cloud")
     report = cv.validate_config()
     assert report.ok
-    assert any("mem0" in w for w in report.warnings)
+    assert any("long-term memory" in w for w in report.warnings)
 
 
 def test_cloud_with_qdrant_configured_is_quiet(settings) -> None:

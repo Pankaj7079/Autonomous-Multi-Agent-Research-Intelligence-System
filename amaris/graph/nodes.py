@@ -20,7 +20,7 @@ from amaris.evaluation.retrieval_eval import RetrievalEvaluator
 
 # GraphState must exist at runtime: langgraph resolves node annotations when compiling
 from amaris.graph.state import FINISH, GraphState
-from amaris.memory.mem0_memory import add_session_summary
+from amaris.memory.episodic import add_session_summary
 from amaris.observability.logging import logger
 from amaris.safety.guardrails import validate_output
 

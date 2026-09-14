@@ -24,6 +24,17 @@ def test_a_paragraph_longer_than_the_budget_is_split_rather_than_dropped() -> No
     assert "".join(chunks).count("x") >= 900
 
 
+def test_a_long_paragraph_is_not_stored_twice_inside_one_chunk() -> None:
+    """The hard split advanced by size-overlap and then overlap was prepended again, so each
+    chunk of an unbroken page carried the same passage back to back. Seen in real stored data."""
+    markers = [f"[m{i:03d}]" for i in range(400)]
+    chunks = chunk_text("".join(markers), size=300, overlap=60)
+
+    for chunk in chunks:
+        for marker in markers:
+            assert chunk.count(marker) <= 1, f"{marker} repeated inside one chunk"
+
+
 def test_empty_text_produces_no_chunks() -> None:
     assert chunk_text("", size=200, overlap=20) == []
 
@@ -40,14 +51,73 @@ async def test_a_file_over_the_size_cap_is_refused_before_any_parsing() -> None:
         await ingest("big.pdf", oversized, "application/pdf", "s1")
 
 
-async def test_a_scanned_pdf_says_so_instead_of_indexing_nothing(
+async def test_a_scanned_pdf_is_rendered_and_read_rather_than_refused(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A scan parses fine and yields no text — the user needs to be told to upload it as an image."""
+    """A scan has pages but no text layer. Telling the user to convert it themselves was the
+    bug; the pages are rasterised and read instead."""
     monkeypatch.setattr(attachments, "extract_pdf", lambda data, pages: "")
+    monkeypatch.setattr(attachments, "rasterize_pdf", lambda data, pages, scale: [b"png1", b"png2"])
 
-    with pytest.raises(AttachmentError):
-        await ingest("scan.pdf", b"%PDF-1.4", "application/pdf", "s1")
+    async def fake_read(data: bytes, mime: str = "image/png") -> str:
+        return f"page text from {data.decode()}"
+
+    async def fake_upsert(documents: list[dict[str, object]], session_id: str = "") -> int:
+        return len(documents)
+
+    monkeypatch.setattr(attachments, "extract_image", fake_read)
+    monkeypatch.setattr("amaris.tools.vector_tool.upsert_documents", fake_upsert)
+
+    record = await ingest("scan.pdf", b"%PDF-1.4", "application/pdf", "s1")
+
+    assert record["scanned"] is True
+    assert record["chunks"] >= 1
+
+
+async def test_a_scan_still_parses_when_the_vision_api_is_out_of_quota(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The free vision tier runs out regularly. Offline OCR is what keeps uploads working."""
+    calls: list[str] = []
+
+    async def exhausted(data: bytes, mime: str) -> str:
+        calls.append("vision")
+        raise RuntimeError("429 RESOURCE_EXHAUSTED")
+
+    async def ocr(data: bytes) -> str:
+        calls.append("ocr")
+        return "INVOICE 8841 total 4,380.50"
+
+    monkeypatch.setattr(attachments, "vision_image", exhausted)
+    monkeypatch.setattr(attachments, "ocr_image", ocr)
+    monkeypatch.setattr("amaris.llm.router.provider_status", dict)
+
+    text = await attachments.extract_image(b"fake-png", "image/png")
+
+    assert "INVOICE 8841" in text
+    assert calls == ["vision", "ocr"], "vision is tried first, OCR is the fallback"
+
+
+async def test_a_rate_limited_vision_provider_is_skipped_not_waited_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The router already tracks cooldowns, so a parked provider costs no 429 round trip."""
+    calls: list[str] = []
+
+    async def vision(data: bytes, mime: str) -> str:
+        calls.append("vision")
+        return "should not be reached"
+
+    async def ocr(data: bytes) -> str:
+        calls.append("ocr")
+        return "read offline"
+
+    monkeypatch.setattr(attachments, "vision_image", vision)
+    monkeypatch.setattr(attachments, "ocr_image", ocr)
+    monkeypatch.setattr("amaris.llm.router.provider_status", lambda: {"gemini": 42.0})
+
+    assert await attachments.extract_image(b"fake-png", "image/png") == "read offline"
+    assert calls == ["ocr"]
 
 
 async def test_ingest_stores_chunks_scoped_to_the_session(monkeypatch: pytest.MonkeyPatch) -> None:

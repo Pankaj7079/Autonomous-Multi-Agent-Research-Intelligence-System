@@ -7,9 +7,11 @@ rather than pasted whole into every downstream prompt.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import io
 import re
+from functools import lru_cache
 from itertools import pairwise
 from typing import Any
 
@@ -63,10 +65,13 @@ def chunk_text(text: str, size: int, overlap: int) -> list[str]:
             continue
         if current:
             chunks.append(current)
-        # a single paragraph longer than the budget is hard-split; nothing smarter to do
+        # a single paragraph longer than the budget is hard-split; nothing smarter to do.
+        # no overlap is applied here — it is added once, below, for every chunk alike.
+        # advancing by size-overlap here as well double-counted it and stored the same
+        # passage twice inside one chunk.
         while len(piece) > size:
             chunks.append(piece[:size])
-            piece = piece[size - overlap :]
+            piece = piece[size:]
         current = piece
     if current:
         chunks.append(current)
@@ -80,7 +85,8 @@ def chunk_text(text: str, size: int, overlap: int) -> list[str]:
 
 
 def extract_pdf(data: bytes, max_pages: int) -> str:
-    """Text of the first `max_pages` pages. Raises AttachmentError when it cannot be read."""
+    """Text layer of the first `max_pages` pages. Empty string for a scan — the caller
+    then rasterises it and reads the pages instead."""
     try:
         from pypdf import PdfReader
     except ImportError as exc:
@@ -92,29 +98,69 @@ def extract_pdf(data: bytes, max_pages: int) -> str:
     except Exception as exc:
         raise AttachmentError(f"could not read this PDF: {exc}") from exc
 
-    text = _clean("\n\n".join(pages))
-    if not text:
-        # a scanned PDF has pages but no text layer, which is worth saying plainly
-        raise AttachmentError(
-            "this PDF has no selectable text — it is probably a scan. "
-            "Upload it as an image instead and the vision model will read it."
-        )
-    return text
+    return _clean("\n\n".join(pages))
 
 
-async def extract_image(data: bytes, mime: str) -> str:
-    """Read an image with the vision model already in the provider chain — no OCR dependency."""
+def rasterize_pdf(data: bytes, max_pages: int, scale: float) -> list[bytes]:
+    """Render pages to PNGs so a scan can be read. PDFium is BSD; PyMuPDF would be AGPL."""
+    try:
+        import pypdfium2 as pdfium
+    except ImportError as exc:
+        raise AttachmentError("reading a scanned PDF needs `uv sync --extra files`") from exc
 
+    try:
+        document = pdfium.PdfDocument(data)
+        images = []
+        for page in list(document)[:max_pages]:
+            buffer = io.BytesIO()
+            page.render(scale=scale).to_pil().convert("RGB").save(buffer, format="PNG")
+            images.append(buffer.getvalue())
+    except Exception as exc:
+        raise AttachmentError(f"could not render this PDF: {exc}") from exc
+    return images
+
+
+async def ocr_image(data: bytes) -> str:
+    """Read an image with RapidOCR — Apache-2.0, ONNX, offline, and not rate limited.
+
+    This is what makes a scan work at all: the free vision API quota runs out regularly,
+    and an uploaded document has to keep parsing when it does.
+    """
+    try:
+        import numpy as np
+        from PIL import Image
+        from rapidocr_onnxruntime import RapidOCR
+    except ImportError as exc:
+        raise AttachmentError("offline OCR needs `uv sync --extra files`") from exc
+
+    def run() -> str:
+        engine = _ocr_engine(RapidOCR)
+        image = Image.open(io.BytesIO(data)).convert("RGB")
+        result, _ = engine(np.array(image))
+        return "\n".join(line[1] for line in (result or []))
+
+    loop = asyncio.get_running_loop()
+    # OCR is CPU-bound and takes seconds per page, so it must not block the event loop
+    return _clean(await loop.run_in_executor(None, run))
+
+
+@lru_cache(maxsize=1)
+def _ocr_engine(factory: Any) -> Any:
+    """RapidOCR loads its ONNX models on construction, so it is built once per process."""
+    return factory()
+
+
+async def vision_image(data: bytes, mime: str) -> str:
+    """Read an image with the vision model in the provider chain. Richer than OCR — it also
+    describes charts — but it is the part that runs out of free quota."""
     from langchain_core.messages import HumanMessage
 
     from amaris.llm.router import configured_chain, get_llm
 
-    # groq leads the chain but its models are text only, so vision pins gemini rather than
-    # taking whatever is first and failing on the request
+    # groq and glm both reject image content outright, so vision pins gemini rather than
+    # taking whatever leads the chain and failing on the request
     if VISION_PROVIDER not in configured_chain():
-        raise AttachmentError(
-            "reading an image needs GEMINI_API_KEY — the rest of the chain is text only"
-        )
+        raise AttachmentError("no vision provider configured")
 
     encoded = base64.b64encode(data).decode("ascii")
     message = HumanMessage(
@@ -123,14 +169,32 @@ async def extract_image(data: bytes, mime: str) -> str:
             {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{encoded}"}},
         ]
     )
-    try:
-        response = await get_llm("vision", provider=VISION_PROVIDER).ainvoke([message])
-    except Exception as exc:
-        raise AttachmentError(f"the vision model could not read this image: {exc}") from exc
+    response = await get_llm("vision", provider=VISION_PROVIDER).ainvoke([message])
+    return _clean(str(response.content))
 
-    text = _clean(str(response.content))
+
+async def extract_image(data: bytes, mime: str = "image/png") -> str:
+    """Vision model first for the richer read, offline OCR when it is unavailable.
+
+    Mirrors how the LLM router already handles providers: try the best one, fall through on
+    failure. A rate-limited gemini is skipped outright rather than waited on for a 429.
+    """
+    from amaris.llm.router import provider_status
+
+    cooling = provider_status().get(VISION_PROVIDER) or 0.0
+    if not cooling:
+        try:
+            text = await vision_image(data, mime)
+            if text:
+                logger.bind(reader=VISION_PROVIDER).debug("attachment.read")
+                return text
+        except Exception as exc:
+            logger.bind(error=str(exc)[:150]).info("attachment.vision_unavailable")
+
+    text = await ocr_image(data)
     if not text:
-        raise AttachmentError("the vision model returned nothing for this image")
+        raise AttachmentError("no text could be read from this image")
+    logger.bind(reader="rapidocr", chars=len(text)).debug("attachment.read")
     return text
 
 
@@ -146,8 +210,24 @@ async def ingest(name: str, data: bytes, mime: str, session_id: str) -> dict[str
         limit_mb = settings.attachment_max_bytes / 1_000_000
         raise AttachmentError(f"{name} is larger than the {limit_mb:.0f}MB limit")
 
+    scanned = False
     if mime in PDF_TYPES:
         text = extract_pdf(data, settings.attachment_max_pages)
+        if not text:
+            # no text layer means a scan, so the pages are rendered and read as images
+            # rather than handing the problem back to the user
+            scanned = True
+            pages = rasterize_pdf(
+                data, settings.attachment_max_scan_pages, settings.attachment_scan_scale
+            )
+            if not pages:
+                raise AttachmentError(f"{name} has no pages to read")
+            read = await asyncio.gather(
+                *(extract_image(page) for page in pages), return_exceptions=True
+            )
+            text = _clean("\n\n".join(part for part in read if isinstance(part, str) and part))
+            if not text:
+                raise AttachmentError(f"{name} is a scan and no text could be read from it")
     else:
         text = await extract_image(data, mime)
 
@@ -169,5 +249,7 @@ async def ingest(name: str, data: bytes, mime: str, session_id: str) -> dict[str
             "the `files` extra is missing"
         )
 
-    logger.bind(file=name, mime=mime, chunks=stored, chars=len(text)).info("attachment.ingested")
-    return {"name": name, "url": url, "chunks": stored, "chars": len(text)}
+    logger.bind(file=name, mime=mime, chunks=stored, chars=len(text), scanned=scanned).info(
+        "attachment.ingested"
+    )
+    return {"name": name, "url": url, "chunks": stored, "chars": len(text), "scanned": scanned}

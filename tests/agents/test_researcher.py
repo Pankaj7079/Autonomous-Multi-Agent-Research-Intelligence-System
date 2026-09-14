@@ -315,8 +315,12 @@ async def test_an_attached_file_reaches_the_report_as_a_citable_source(
     state["research_plan"] = [{"task_id": "t1", "description": "what does the spec say"}]
     state["attachments"] = [{"name": "spec.pdf", "url": "file://spec.pdf", "chunks": 3}]
 
-    async def fake_kb(query: str, limit: int = 5, session_id: str = "") -> list[dict[str, Any]]:
-        assert session_id == "test1234", "chunks must be scoped to this session"
+    async def fake_kb(
+        query: str, limit: int = 5, session_id: str = "", urls: list[str] | None = None
+    ) -> list[dict[str, Any]]:
+        # by url, not session: ingestion uses the conversation's id and the run has its own,
+        # so filtering by session_id here matched nothing and the file was silently ignored
+        assert urls == ["file://spec.pdf"], f"must filter by the attached file, got {urls}"
         return [
             {
                 "text": "The supervisor decides at two gates.",
@@ -354,7 +358,9 @@ async def test_an_attached_file_survives_the_relevance_floor(
     state["research_plan"] = [{"task_id": "t1", "description": "find things"}]
     state["attachments"] = [{"name": "notes.pdf", "url": "file://notes.pdf", "chunks": 1}]
 
-    async def fake_kb(query: str, limit: int = 5, session_id: str = "") -> list[dict[str, Any]]:
+    async def fake_kb(
+        query: str, limit: int = 5, session_id: str = "", urls: list[str] | None = None
+    ) -> list[dict[str, Any]]:
         return [
             {
                 "text": "Completely unrelated prose about gardening.",
@@ -377,7 +383,9 @@ async def test_no_attachment_means_no_vector_lookup(monkeypatch: pytest.MonkeyPa
     state["research_plan"] = [{"task_id": "t1", "description": "find things"}]
     called = False
 
-    async def fake_kb(query: str, limit: int = 5, session_id: str = "") -> list[dict[str, Any]]:
+    async def fake_kb(
+        query: str, limit: int = 5, session_id: str = "", urls: list[str] | None = None
+    ) -> list[dict[str, Any]]:
         nonlocal called
         called = True
         return []

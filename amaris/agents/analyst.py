@@ -64,7 +64,14 @@ class AnalystAgent(BaseAgent):
     task_type = "analysis"
 
     async def _run(self, state: GraphState) -> dict[str, Any]:
-        knowledge = await search_knowledge_base(subject(state), limit=KB_LIMIT)
+        # scoped to the files this conversation attached. Unscoped, this searched the whole
+        # shared collection and fed the analyst chunks of documents from other conversations
+        attached = [str(item.get("url", "")) for item in state.get("attachments") or []]
+        knowledge = (
+            await search_knowledge_base(subject(state), limit=KB_LIMIT, urls=attached)
+            if attached
+            else []
+        )
         prompt = PROMPT.format(
             untrusted_notice=UNTRUSTED_NOTICE,
             query=state["original_query"],

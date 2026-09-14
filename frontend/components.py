@@ -100,6 +100,20 @@ def agent_grid() -> None:
     st.markdown(f'<div class="agents">{"".join(cards)}</div>', unsafe_allow_html=True)
 
 
+def asking(query: str, spoken: bool = False) -> None:
+    """The question being worked on, shown for the whole run.
+
+    Matters most for a spoken question: without it the only confirmation of what was heard
+    was a toast, and the rerun that starts the run discards it before it can be read.
+    """
+    tag = "heard" if spoken else "asking"
+    st.markdown(
+        f'<div class="asking"><span class="who">{tag}</span>'
+        f"<span class='q'>{html.escape(query)}</span></div>",
+        unsafe_allow_html=True,
+    )
+
+
 def _visits(events: list[ProgressEvent]) -> list[tuple[ProgressEvent, float]]:
     """One (event, seconds-spent) pair per agent visit — shared by the timeline and chart."""
     visits: list[tuple[ProgressEvent, float]] = []

@@ -104,7 +104,7 @@ async def test_upsert_of_nothing_is_a_no_op() -> None:
 async def test_upsert_returns_zero_when_collection_is_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def no_collection() -> bool:
+    async def no_collection(collection: str = "") -> bool:
         return False
 
     monkeypatch.setattr(vector_tool, "ensure_collection", no_collection)

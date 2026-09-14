@@ -60,9 +60,19 @@ def validate_config() -> ConfigReport:
             f"never leaves research or approves work the critic would reject"
         )
 
+    if settings.key("resend_api_key"):
+        if not settings.email_from.strip():
+            errors.append("RESEND_API_KEY is set but EMAIL_FROM is empty — resend rejects that")
+        elif settings.is_cloud and not settings.email_allowed_domains:
+            # not an error: the app runs fine, it just will not send
+            warnings.append(
+                "cloud mode with no EMAIL_ALLOWED_DOMAINS — emailing reports stays disabled "
+                "so a public demo cannot be used to mail strangers"
+            )
+
     if settings.is_cloud and not (settings.qdrant_url and settings.key("qdrant_api_key")):
         warnings.append(
-            "cloud mode without QDRANT_URL and QDRANT_API_KEY — mem0 and vector search no-op"
+            "cloud mode without QDRANT_URL and QDRANT_API_KEY — long-term memory and attachment search no-op"
         )
 
     return ConfigReport(errors=errors, warnings=warnings, providers=providers)

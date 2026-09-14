@@ -71,13 +71,22 @@ def test_an_expand_request_locks_the_depth_and_keeps_the_sources() -> None:
 
     seed = ResearchRequest(
         query="tell about god rama",
-        expand_from_depth="brief",
+        depth="standard",
         prior_sources=[{"url": "https://a.com", "title": "a"}],
     ).seed()
 
-    assert seed["query_depth"] == "brief"
+    assert seed["query_depth"] == "standard"
     assert seed["depth_locked"] is True
     assert seed["raw_research"] == [{"url": "https://a.com", "title": "a", "content": ""}]
+
+
+def test_a_chosen_depth_locks_without_carrying_any_sources() -> None:
+    """The depth picker sends a depth and nothing else — it is a new question, not an expand."""
+    from amaris.api.schemas import ResearchRequest
+
+    seed = ResearchRequest(query="what is langgraph", depth="deep").seed()
+
+    assert seed == {"query_depth": "deep", "depth_locked": True}
 
 
 def test_a_reused_source_keeps_its_text_under_the_key_the_researcher_reads() -> None:
@@ -86,16 +95,16 @@ def test_a_reused_source_keeps_its_text_under_the_key_the_researcher_reads() -> 
 
     seed = ResearchRequest(
         query="tell about god rama",
-        expand_from_depth="brief",
+        depth="brief",
         prior_sources=[{"url": "https://a.com", "snippet": "Rama was born in Ayodhya."}],
     ).seed()
     assert seed["raw_research"][0]["content"] == "Rama was born in Ayodhya."
 
 
-def test_a_bogus_expand_depth_is_ignored_rather_than_trusted() -> None:
+def test_a_bogus_depth_is_ignored_rather_than_trusted() -> None:
     from amaris.api.schemas import ResearchRequest
 
-    assert ResearchRequest(query="q about things", expand_from_depth="enormous").seed() == {}
+    assert ResearchRequest(query="q about things", depth="enormous").seed() == {}
 
 
 def test_history_reaches_the_seed_as_plain_dicts() -> None:

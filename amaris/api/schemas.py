@@ -15,8 +15,8 @@ if TYPE_CHECKING:
 
 JobState = Literal["queued", "running", "done", "failed"]
 
-# an expand reuses what the last turn gathered; 12 is the deepest budget's max_sources
-MAX_PRIOR_SOURCES = 12
+# an expand reuses what the last turn gathered; 20 is the deepest budget's max_sources
+MAX_PRIOR_SOURCES = 20
 # each attached file becomes one citable source, so this is also a cap on how much of the
 # reference list one upload can occupy
 MAX_ATTACHMENTS = 5
@@ -65,8 +65,9 @@ class ResearchRequest(BaseModel):
     query: str = Field(min_length=3, max_length=500)
     session_id: str | None = None
     history: list[PriorTurn] = Field(default_factory=list, max_length=HISTORY_TURNS)
-    # set to the depth the previous turn ran at; triage bumps it and spends no model call
-    expand_from_depth: str | None = None
+    # the depth this run must use, already resolved by the caller — the depth picker sends its
+    # choice and "explain in detail" sends the bumped one. None means triage decides as usual.
+    depth: str | None = None
     prior_sources: list[dict[str, Any]] = Field(default_factory=list, max_length=MAX_PRIOR_SOURCES)
     # files already ingested into Qdrant for this session: [{name, url, chunks}]. The text is
     # not carried here — the researcher retrieves what it needs by session_id.
@@ -79,9 +80,10 @@ class ResearchRequest(BaseModel):
             seed["history"] = [turn.model_dump() for turn in self.history]
         if self.attachments:
             seed["attachments"] = list(self.attachments)
-        if self.expand_from_depth in DEPTHS:
-            seed["query_depth"] = self.expand_from_depth
+        if self.depth in DEPTHS:
+            seed["query_depth"] = self.depth
             seed["depth_locked"] = True
+        if self.prior_sources:
             # the trace trims content down to "snippet", so accept either key or the reused
             # sources reach the writer with no text at all
             seed["raw_research"] = [

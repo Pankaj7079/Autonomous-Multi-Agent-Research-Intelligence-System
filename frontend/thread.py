@@ -8,6 +8,8 @@ st.session_state and dies with the browser session, which is the whole scope of 
 from __future__ import annotations
 
 import html
+from functools import lru_cache
+from importlib.util import find_spec
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -25,6 +27,8 @@ SELECTED = "selected_turn"
 PENDING = "pending"
 ATTACHMENTS = "attachments"
 ATTACHMENT_SESSION = "attachment_session"
+# deliberately not cleared by "start over": a cap a reset button refills is not a cap
+EMAILS_SENT = "emails_sent"
 
 # the thread is a demo surface, not a transcript archive — old turns fall off the end
 MAX_TURNS = 12
@@ -113,7 +117,8 @@ def expand_request(turn: dict[str, Any]) -> dict[str, Any]:
     result = turn["result"]
     return {
         "query": str(turn["query"]),
-        "expand_from_depth": depth_of(turn),
+        # the bump is resolved here, next to the button label that already shows the target
+        "depth": NEXT_DEPTH.get(depth_of(turn), ""),
         "prior_sources": list(result.trace.sources) if result.trace else [],
         "history": history_payload()[:-1],
         # the deeper pass must still see the uploaded file, or expanding loses it
@@ -139,13 +144,17 @@ def attachment_session() -> str:
     return str(st.session_state[ATTACHMENT_SESSION])
 
 
-def ask_request(query: str) -> dict[str, Any]:
-    """A pending action for a new question, carrying the conversation so far."""
+def ask_request(query: str, depth: str = "") -> dict[str, Any]:
+    """A pending action for a new question, carrying the conversation so far.
+
+    An empty depth leaves the sizing to triage, which is the default.
+    """
     return {
         "query": query,
+        "depth": depth,
         "history": history_payload(),
         "attachments": list(attachments()),
-        "label": "researching",
+        "label": f"researching · {depth}" if depth else "researching",
     }
 
 
@@ -226,8 +235,9 @@ def turn_card(turn: dict[str, Any], index: int, *, is_last: bool) -> None:
 
 
 def _actions(turn: dict[str, Any], index: int, *, is_last: bool) -> None:
-    """Expand, inspect, download. Rendered as real buttons so keyboard and screen readers work."""
-    slots = st.columns([3, 1.5, 1.7, 4], gap="small")
+    """Expand, inspect, download, send. Real buttons so keyboard and screen readers work."""
+    # the trailing slot is a spacer: without it the buttons stretch across the whole column
+    slots = st.columns([2.6, 1.3, 1.4, 1.5, 1.2, 2.0], gap="small")
 
     if can_expand(turn):
         target = NEXT_DEPTH.get(depth_of(turn), "")
@@ -249,15 +259,111 @@ def _actions(turn: dict[str, Any], index: int, *, is_last: bool) -> None:
         st.session_state[SELECTED] = index
         st.rerun()
 
-    if answer_of(turn):
-        slots[2].download_button(
-            "download .md",
-            data=answer_of(turn),
-            file_name=f"amaris_{str(turn['session_id'])[:8] or 'report'}.md",
-            mime="text/markdown",
-            key=f"dl_{index}",
+    if not answer_of(turn):
+        return
+
+    slots[2].download_button(
+        "download .md",
+        data=answer_of(turn),
+        file_name=f"amaris_{str(turn['session_id'])[:8] or 'report'}.md",
+        mime="text/markdown",
+        key=f"dl_{index}",
+        use_container_width=True,
+    )
+    _download_docx(turn, index, slots[3])
+    _email_control(turn, index, slots[4])
+
+
+@lru_cache(maxsize=1)
+def _docx_available() -> bool:
+    """Checked before rendering, not inside the download callback — that runs on another
+    thread where an ImportError surfaces as a stack trace rather than a message."""
+    return find_spec("docx") is not None
+
+
+def _download_docx(turn: dict[str, Any], index: int, slot: Any) -> None:
+    from amaris.export import DOCX_MIME, build_docx, docx_filename
+
+    query = str(turn["query"])
+    if not _docx_available():
+        slot.button(
+            "download .docx",
+            key=f"docx_{index}",
+            disabled=True,
             use_container_width=True,
+            help="run `uv sync --extra export` to enable this",
         )
+        return
+
+    result = turn.get("result")
+    session_id = str(turn.get("session_id", ""))
+    elapsed = float(turn.get("elapsed") or 0.0)
+    slot.download_button(
+        "download .docx",
+        # a callable, so the document is built on click instead of on every rerun of every turn
+        data=lambda: build_docx(result, query, session_id=session_id, elapsed=elapsed),
+        file_name=docx_filename(query),
+        mime=DOCX_MIME,
+        key=f"docx_{index}",
+        use_container_width=True,
+    )
+
+
+def _email_control(turn: dict[str, Any], index: int, slot: Any) -> None:
+    """Hidden entirely when no key is set, or when a public deploy has no allow-list."""
+    from amaris.export import email_enabled
+
+    if not email_enabled():
+        return
+
+    with slot.popover("email", use_container_width=True):
+        address = st.text_input(
+            "send this report to",
+            key=f"to_{index}",
+            placeholder="you@example.com",
+            # deliberately its own widget: the composer masks addresses to [EMAIL] as PII
+            help="the report as a .docx, plus the text inline",
+        )
+        if st.button("send", key=f"send_{index}", use_container_width=True):
+            _send(turn, address)
+
+
+def _send(turn: dict[str, Any], address: str) -> None:
+    """One send, with the per-session cap applied before anything leaves the process."""
+    import asyncio
+
+    from amaris.export import build_docx, docx_filename, refusal_reason, send_report
+
+    sent = int(st.session_state.get(EMAILS_SENT, 0))
+    cap = get_settings().email_max_per_session
+    if sent >= cap:
+        st.error(f"{cap} emails already sent from this session")
+        return
+
+    reason = refusal_reason(address)
+    if reason:
+        st.error(reason)
+        return
+
+    query = str(turn["query"])
+    answer = answer_of(turn)
+    attachment = build_docx(turn.get("result"), query, session_id=str(turn.get("session_id", "")))
+    try:
+        asyncio.run(
+            send_report(
+                address.strip(),
+                f"AMARIS · {query[:80]}",
+                _render_markdown(answer),
+                attachment=attachment if _docx_available() else b"",
+                filename=docx_filename(query),
+            )
+        )
+    except Exception as exc:
+        st.error(f"could not send: {exc}")
+        return
+
+    st.session_state[EMAILS_SENT] = sent + 1
+    st.success(f"sent to {address.strip()}")
 
 
 def thread_sidebar() -> None:

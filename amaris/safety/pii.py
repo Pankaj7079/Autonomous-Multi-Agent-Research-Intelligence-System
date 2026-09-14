@@ -81,6 +81,12 @@ def _ip_matches(text: str) -> list[PIIMatch]:
     ]
 
 
+def looks_like_email(text: str) -> bool:
+    """True when the whole string is one address. The mailer validates recipients with this,
+    so there is one email pattern in the repo rather than a second that drifts from it."""
+    return bool(_EMAIL.fullmatch(text.strip()))
+
+
 def detect_pii(text: str) -> list[PIIMatch]:
     """Every match, ordered by position. Overlaps are resolved longest-first."""
     if not text:

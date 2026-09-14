@@ -117,12 +117,25 @@ async def test_the_prompt_asks_about_the_question_not_about_routing(
 
 
 def test_every_depth_has_a_budget_and_none_gathers_more_than_it_reads() -> None:
-    """Gathering past what the writer reads is exactly the waste this replaced."""
+    """Gathering past what the writer reads is exactly the waste this replaced.
+
+    Read from the setting rather than a literal: the researcher clamps with
+    min(budget.max_sources, max_sources_in_prompt), so a hard-coded ceiling here passed
+    happily while that clamp silently cut deep's budget back down to standard's.
+    """
+    from amaris.config.settings import get_settings
+
+    ceiling = get_settings().max_sources_in_prompt
     assert set(DEPTH_BUDGETS) == set(DEPTHS)
     for depth, budget in DEPTH_BUDGETS.items():
-        assert budget.max_sources <= 12, depth
+        assert budget.max_sources <= ceiling, depth
         assert budget.sections[0] == "Answer", depth
         assert budget.tasks >= 1 and budget.react_iterations >= 1, depth
+
+
+def test_deep_actually_reads_more_than_standard() -> None:
+    """Otherwise the depth picker's "deep" is a longer report written from the same evidence."""
+    assert budget_for("deep").max_sources > budget_for("standard").max_sources
 
 
 def test_shallow_depths_skip_the_analyst() -> None:
@@ -143,12 +156,12 @@ def test_a_shallow_depth_does_not_earn_a_rewrite_round() -> None:
     assert budget_for("standard").max_revisions == 2
 
 
-# ── expand: the user already decided, so triage must spend nothing ─────────
+# ── a locked depth: the user already decided, so triage must spend nothing ─────────
 
 
-async def test_expanding_costs_no_model_call(monkeypatch: pytest.MonkeyPatch, state) -> None:
+async def test_a_locked_depth_costs_no_model_call(monkeypatch: pytest.MonkeyPatch, state) -> None:
     """A confirmation call here would be ADR-030's decorative-LLM bug rebuilt one layer up."""
-    state["query_depth"] = "brief"
+    state["query_depth"] = "deep"
     state["depth_locked"] = True
 
     agent = TriageAgent()
@@ -156,27 +169,26 @@ async def test_expanding_costs_no_model_call(monkeypatch: pytest.MonkeyPatch, st
     update = await agent.run(state)
 
     assert llm.prompts == []
-    assert update["query_depth"] == "standard"
-    assert update["word_target"] == budget_for("standard").word_target
+    assert update["query_depth"] == "deep"
+    assert update["word_target"] == budget_for("deep").word_target
 
 
-async def test_expanding_unlocks_so_the_next_question_is_triaged_normally(
-    monkeypatch: pytest.MonkeyPatch, state
-) -> None:
+async def test_a_locked_depth_is_obeyed_not_bumped(monkeypatch: pytest.MonkeyPatch, state) -> None:
+    """The caller resolves the depth — "explain in detail" sends the bumped one already."""
     state["query_depth"] = "standard"
     state["depth_locked"] = True
     update = await triage(monkeypatch, state, verdict())
 
-    assert update["query_depth"] == "deep"
+    assert update["query_depth"] == "standard"
     assert update["depth_locked"] is False
 
 
-async def test_expanding_the_deepest_depth_stays_there(
+async def test_a_nonsense_locked_depth_falls_back_rather_than_crashing(
     monkeypatch: pytest.MonkeyPatch, state
 ) -> None:
-    state["query_depth"] = "deep"
+    state["query_depth"] = "enormous"
     state["depth_locked"] = True
-    assert (await triage(monkeypatch, state, verdict()))["query_depth"] == "deep"
+    assert (await triage(monkeypatch, state, verdict()))["query_depth"] == DEFAULT_DEPTH
 
 
 # ── follow-ups ────────────────────────────────────────────────────────────

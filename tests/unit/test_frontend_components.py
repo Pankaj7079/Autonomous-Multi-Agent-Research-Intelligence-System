@@ -459,3 +459,32 @@ def test_the_sidebar_refuses_a_fully_parked_chain(fake: FakeStreamlit, monkeypat
 
     components.provider_strip()
     assert any("every provider is rate limited" in e for e in errors)
+
+
+def test_the_question_is_shown_while_its_run_is_in_flight(fake: FakeStreamlit) -> None:
+    """A spoken question had no visible confirmation: the toast was discarded by the rerun
+    that starts the run, so for 60-90s the user could not see what was heard."""
+    components.asking("what is the MCP protocol?", spoken=True)
+    drawn = fake.drawn
+
+    assert 'class="asking"' in drawn
+    assert "what is the MCP protocol?" in drawn
+    # a spoken question is labelled as heard, so a mishearing is obvious rather than puzzling
+    assert ">heard<" in drawn
+
+
+def test_a_typed_question_is_not_labelled_as_heard(fake: FakeStreamlit) -> None:
+    components.asking("what is langgraph?")
+    drawn = fake.drawn
+
+    assert ">asking<" in drawn
+    assert ">heard<" not in drawn
+
+
+def test_the_question_is_escaped_before_it_is_drawn(fake: FakeStreamlit) -> None:
+    """It is user input rendered into unsafe_allow_html markup."""
+    components.asking("<img src=x onerror=alert(1)>")
+    drawn = fake.drawn
+
+    assert "<img" not in drawn
+    assert "&lt;img" in drawn

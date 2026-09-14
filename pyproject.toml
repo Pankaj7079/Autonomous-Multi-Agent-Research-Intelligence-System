@@ -76,14 +76,23 @@ observability = ["langsmith>=0.2.0", "langfuse>=2.0.0"]
 full = [
     "amaris[search,mcp,observability,evaluation]",
 ]
-# Attachment ingestion. pypdf is pure python; fastembed is ONNX and pulls no torch, and its
-# default model is 384-dim — the size vector_tool already creates the collection with, so
-# switching off sentence-transformers needs no migration. Images need no OCR dependency:
-# they go to the vision model already in the provider chain.
+# Attachment ingestion, all ONNX or pure python — nothing here pulls torch.
+#   pypdf      text layer of a normal PDF
+#   pypdfium2  rasterises a scanned PDF to images (BSD; PyMuPDF was rejected as AGPL)
+#   rapidocr   reads those images offline, so a scan still parses when the vision
+#              API is rate limited — which on the free Gemini tier it regularly is
+#   fastembed  384-dim bge-small, the size vector_tool already creates the collection with
 files = [
     "fastembed>=0.8.0",
     "pypdf>=6.0.0",
+    "pypdfium2>=5.0.0",
+    "rapidocr-onnxruntime>=1.4.0",
 ]
+
+# Sending a finished report out as a document. Pure python (lxml only) and the docx
+# writer reuses markdown-it, which is already core. Emailing needs nothing extra —
+# Resend speaks plain HTTP and httpx is already a dependency.
+export = ["python-docx>=1.2.0"]
 
 [dependency-groups]
 dev = [

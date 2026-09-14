@@ -44,7 +44,9 @@ DEPTH_BUDGETS: dict[str, Budget] = {
         5,
         4,
         8,
-        12,
+        # 20, not 12: deep used to read exactly as many sources as standard, so the only
+        # thing it bought was a longer report written from the same evidence
+        20,
         True,
         1100,
         (
@@ -59,7 +61,8 @@ DEPTH_BUDGETS: dict[str, Budget] = {
     ),
 }
 
-# what "explain in detail" moves to — the user's click decides this, so triage spends nothing
+# what "explain in detail" moves to. the caller applies this and sends the resolved depth,
+# so triage never has to work out whether it was asked to bump or to obey
 NEXT_DEPTH: dict[str, str] = {
     "direct": "brief",
     "brief": "standard",
@@ -166,7 +169,7 @@ class TriageAgent(BaseAgent):
 
     async def _run(self, state: GraphState) -> dict[str, Any]:
         if state.get("depth_locked"):
-            return self._expand(state)
+            return self._locked(state)
         try:
             payload = await self._invoke_structured(
                 PROMPT.format(
@@ -183,13 +186,11 @@ class TriageAgent(BaseAgent):
 
         return self._settle(payload)
 
-    def _expand(self, state: GraphState) -> dict[str, Any]:
-        """The user clicked "explain in detail", so the depth is decided and costs no model call."""
-        depth = NEXT_DEPTH.get(state["query_depth"], DEFAULT_DEPTH)
+    def _locked(self, state: GraphState) -> dict[str, Any]:
+        """The user picked the depth, so it is already decided and costs no model call."""
+        depth = state["query_depth"] if state["query_depth"] in DEPTHS else DEFAULT_DEPTH
         budget = budget_for(depth)
-        logger.bind(depth=depth, from_depth=state["query_depth"], llm_decided=False).info(
-            "triage.expanded"
-        )
+        logger.bind(depth=depth, llm_decided=False).info("triage.locked")
         return {
             "query_depth": depth,
             "depth_locked": False,
@@ -197,7 +198,7 @@ class TriageAgent(BaseAgent):
             "clarifying_question": "",
             "report_sections": list(budget.sections),
             "word_target": budget.word_target,
-            "triage_reason": f"expanded to {depth} on request",
+            "triage_reason": f"{depth} requested by the user",
         }
 
     def _settle(self, payload: TriageOutput) -> dict[str, Any]:

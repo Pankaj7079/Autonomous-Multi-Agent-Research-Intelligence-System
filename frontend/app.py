@@ -13,6 +13,7 @@ import httpx
 import streamlit as st
 from websockets.asyncio.client import connect
 
+from amaris.agents.triage import budget_for
 from amaris.api.schemas import (
     DONE_PROGRESS,
     ProgressEvent,
@@ -26,7 +27,7 @@ from amaris.config.validate import ConfigReport, log_report, validate_config
 from amaris.observability.logging import configure_from_settings, logger
 from amaris.safety.guardrails import validate_input
 from frontend import thread
-from frontend.components import hero, label, provider_strip
+from frontend.components import asking, hero, label, provider_strip
 from frontend.styles import inject_css, wordmark
 from frontend.views import inspection, landing, live_run
 
@@ -37,6 +38,16 @@ MIN_QUERY_CHARS = 3
 
 # what the composer's paperclip accepts; images are read by the vision model, not by OCR
 ATTACHMENT_TYPES = ["pdf", "png", "jpg", "jpeg", "webp"]
+
+# "auto" is not a depth, it is the absence of one — triage sizes the question as it always has
+DEPTH_CHOICES = ("auto", "brief", "standard", "deep")
+DEPTH_KEY = "depth_choice"
+# streamlit drops the state of a widget that a rerun did not draw, and a run returns early
+# before the picker — so the choice is mirrored here, where nothing collects it
+DEPTH_SAVED = "depth_choice_saved"
+# from real runs, not from the budget numbers: brief measured 94s and deep 206s. scraping and
+# the evaluator's ~45s dominate, so even the shallow depths are a minute rather than seconds
+DEPTH_ETA = {"brief": "~1-2 min", "standard": "~2-3 min", "deep": "~3-6 min"}
 
 # each one triages to a different depth, so clicking any of them shows the budget logic working
 EXAMPLES = (
@@ -65,9 +76,10 @@ def _payload(action: dict[str, Any]) -> dict[str, Any]:
         "history": action.get("history", []),
         "attachments": action.get("attachments", []),
     }
-    if action.get("expand_from_depth"):
-        body["expand_from_depth"] = action["expand_from_depth"]
-        body["prior_sources"] = action.get("prior_sources", [])
+    if action.get("depth"):
+        body["depth"] = action["depth"]
+    if action.get("prior_sources"):
+        body["prior_sources"] = action["prior_sources"]
     return body
 
 
@@ -127,6 +139,11 @@ async def _run_cloud(action: dict[str, Any], on_event: EventSink) -> RunOutcome:
 def _execute(action: dict[str, Any], is_cloud: bool) -> None:
     """Drive one run, repainting the live view on every event rather than polling for state."""
     events: list[ProgressEvent] = []
+    # the question stays on screen for the whole run — for a spoken one this is the only
+    # confirmation of what was actually heard
+    head = st.empty()
+    with head.container():
+        asking(action["query"], spoken=bool(action.get("spoken")))
     bar = st.progress(0, text=action.get("label", "starting"))
     track = st.empty()
 
@@ -142,13 +159,17 @@ def _execute(action: dict[str, Any], is_cloud: bool) -> None:
         result, session_id, error = asyncio.run(runner)
     finally:
         # the live widgets are replaced by the finished turn card, not stacked with it
+        head.empty()
         bar.empty()
         track.empty()
 
     elapsed = time.perf_counter() - started
     thread.append(action["query"], result, events, session_id, error, elapsed)
     logger.bind(
-        session_id=session_id, cloud=is_cloud, expand=bool(action.get("expand_from_depth"))
+        session_id=session_id,
+        cloud=is_cloud,
+        depth=action.get("depth") or "auto",
+        reused_sources=len(action.get("prior_sources") or []),
     ).info("frontend.run_finished")
 
 
@@ -210,8 +231,32 @@ def _ingest_files(files: list[Any]) -> bool:
             st.error(f"{upload.name} could not be read: {exc}")
             return False
         stored.append(record)
-        st.toast(f"indexed {record['name']} — {record['chunks']} chunks")
+        how = " (scanned, read by OCR)" if record.get("scanned") else ""
+        st.toast(f"indexed {record['name']} — {record['chunks']} chunks{how}")
     return True
+
+
+def _transcribe(audio: Any) -> str | None:
+    """Spoken question to text. None when it could not be heard, with the reason shown.
+
+    The transcript is surfaced rather than run silently: whisper can mishear a technical term,
+    and a wrong question costs a full pipeline run to find out about.
+    """
+    from amaris.tools.transcribe import TranscriptionError, transcribe
+
+    try:
+        spoken = asyncio.run(transcribe(audio.getvalue(), audio.name or "question.wav"))
+    except TranscriptionError as exc:
+        st.warning(str(exc))
+        return None
+    except Exception as exc:
+        logger.bind(error=str(exc)[:200]).exception("frontend.transcribe_failed")
+        st.error(f"speech input failed: {exc}")
+        return None
+
+    # no toast here: the rerun that starts the run discards it before it can be read. The
+    # transcript is shown by the run header instead, which lasts the whole run.
+    return spoken
 
 
 def _examples() -> None:
@@ -222,6 +267,31 @@ def _examples() -> None:
             if st.button(question, use_container_width=True, key=f"eg{hash(question)}"):
                 st.session_state[thread.PENDING] = thread.ask_request(question)
                 st.rerun()
+
+
+def _depth_picker() -> str:
+    """The depth the next question runs at, or "" to let triage size it."""
+    picked = st.segmented_control(
+        "depth",
+        DEPTH_CHOICES,
+        default=str(st.session_state.get(DEPTH_SAVED, "auto")),
+        key=DEPTH_KEY,
+        label_visibility="collapsed",
+    )
+    # clicking the selected chip deselects it, which reads as "stop forcing a depth"
+    choice = str(picked) if picked else "auto"
+    st.session_state[DEPTH_SAVED] = choice
+
+    if choice == "auto":
+        st.caption("auto · triage sizes the question before anything is spent on it")
+    else:
+        budget = budget_for(choice)
+        st.caption(
+            f"{choice} · {budget.tasks} tasks · {budget.react_iterations} react loops · "
+            f"up to {budget.max_sources} sources · ~{budget.word_target} words · "
+            f"{DEPTH_ETA.get(choice, '')} · triage spends no model call"
+        )
+    return "" if choice == "auto" else str(choice)
 
 
 def _dispatch(action: dict[str, Any], settings: Any) -> None:
@@ -292,31 +362,45 @@ def main() -> None:
                 report,
             )
 
+    chosen_depth = _depth_picker()
     submitted = st.chat_input(
-        "ask a follow-up…" if turns else "ask a research question…",
+        "ask a research question, or use the mic…",
         key="composer",
         accept_file="multiple",
         file_type=ATTACHMENT_TYPES,
+        accept_audio=True,
     )
     if not submitted:
         return
 
-    # accept_file makes this a ChatInputValue rather than a str
+    # accept_file/accept_audio make this a ChatInputValue rather than a str
     asked = submitted.text or ""
     if submitted.files and not _ingest_files(submitted.files):
         return
 
+    by_voice = bool(submitted.audio) and not asked.strip()
+    if by_voice:
+        spoken = _transcribe(submitted.audio)
+        if spoken is None:
+            return
+        asked = spoken
+
     if asked.strip():
+        # whatever rejects the question below must still say what was heard, or a misheard
+        # word looks like the microphone failing
+        heard = f' — heard "{asked.strip()}"' if by_voice else ""
         # the same floor ResearchRequest enforces, checked here so cloud mode rejects a
         # two-character question as readably as the API does instead of raising mid-run
         if len(asked.strip()) < MIN_QUERY_CHARS:
-            st.error(f"a question needs at least {MIN_QUERY_CHARS} characters")
+            st.error(f"a question needs at least {MIN_QUERY_CHARS} characters{heard}")
             return
         guard = validate_input(asked)
         if not guard.ok:
-            st.error(guard.reason)
+            st.error(f"{guard.reason}{heard}")
             return
-        st.session_state[thread.PENDING] = thread.ask_request(guard.text.strip())
+        request = thread.ask_request(guard.text.strip(), chosen_depth)
+        request["spoken"] = by_voice
+        st.session_state[thread.PENDING] = request
         st.rerun()
     elif submitted.files:
         # a file with no question is a valid thing to do — it is ready for the next question

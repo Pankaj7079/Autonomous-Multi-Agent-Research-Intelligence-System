@@ -385,6 +385,21 @@ section[data-testid="stSidebar"] .chip {{
 .flow .sep {{ color: var(--line-2); margin-top: 0.78rem; font-size: 0.75rem; }}
 @keyframes breathe {{ 0%,100% {{ opacity: 0.7; }} 50% {{ opacity: 1; }} }}
 
+/* ═══ the question, while its run is in flight ═════════════════════════════ */
+.asking {{
+  display: flex; align-items: baseline; gap: 0.7rem; flex-wrap: wrap;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r);
+  box-shadow: var(--lift); padding: 0.85rem 1.05rem; margin-bottom: 0.55rem;
+}}
+.asking .who {{
+  font-family: var(--mono); font-size: 0.61rem; letter-spacing: 0.17em;
+  text-transform: uppercase; color: var(--accent); flex: none;
+}}
+.asking .q {{
+  font-size: 1.02rem; font-weight: 650; color: var(--text);
+  letter-spacing: -0.015em; line-height: 1.4;
+}}
+
 /* ═══ run bar ══════════════════════════════════════════════════════════════ */
 .runbar {{
   display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;

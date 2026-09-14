@@ -325,3 +325,45 @@ async def test_a_short_word_target_still_gets_told_to_stop_early(
 
     assert "Shorter is better than padded" in llm.prompts[0]
     assert "asked in depth on purpose" not in llm.prompts[0]
+
+
+async def test_the_analyst_only_searches_files_this_conversation_attached(
+    monkeypatch: pytest.MonkeyPatch, researched_state
+) -> None:
+    """Unscoped, this searched the whole shared collection. Measured against real data, asking
+    about supervisor routing returned five chunks of an unrelated CV uploaded in another run."""
+    seen: dict[str, object] = {}
+
+    async def fake_kb(
+        query: str, limit: int = 5, session_id: str = "", urls: list[str] | None = None
+    ) -> list[dict[str, Any]]:
+        seen["urls"] = urls
+        return []
+
+    monkeypatch.setattr(analyst_module, "search_knowledge_base", fake_kb)
+    researched_state["attachments"] = [{"name": "spec.pdf", "url": "file://spec.pdf"}]
+
+    agent = AnalystAgent()
+    patch_invoke(monkeypatch, agent, ScriptedLLM("no computation needed"))
+    await agent.run(researched_state)
+
+    assert seen["urls"] == ["file://spec.pdf"]
+
+
+async def test_the_analyst_skips_the_lookup_when_nothing_was_attached(
+    monkeypatch: pytest.MonkeyPatch, researched_state
+) -> None:
+    """No attachment means nothing to retrieve, so the round trip is not worth making."""
+    called = False
+
+    async def fake_kb(*args: Any, **kwargs: Any) -> list[dict[str, Any]]:
+        nonlocal called
+        called = True
+        return []
+
+    monkeypatch.setattr(analyst_module, "search_knowledge_base", fake_kb)
+    agent = AnalystAgent()
+    patch_invoke(monkeypatch, agent, ScriptedLLM("no computation needed"))
+    await agent.run(researched_state)
+
+    assert not called
