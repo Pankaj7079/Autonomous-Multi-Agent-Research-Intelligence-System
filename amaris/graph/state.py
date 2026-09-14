@@ -64,6 +64,10 @@ class GraphState(TypedDict):
     research_plan: list[dict[str, Any]]
     research_strategy: str
 
+    # files the user attached: [{name, url, chunks}]. The text lives in Qdrant, not here —
+    # the researcher retrieves the relevant chunks per task rather than carrying the document
+    attachments: list[dict[str, Any]]
+
     # researcher — research_quality is its own 0-1 self-assessment
     raw_research: list[dict[str, Any]]
     research_quality: float
@@ -102,7 +106,7 @@ class GraphState(TypedDict):
     error: str | None
 
 
-SEEDABLE = ("raw_research", "query_depth", "depth_locked", "history")
+SEEDABLE = ("raw_research", "query_depth", "depth_locked", "history", "attachments")
 
 
 def new_state(
@@ -129,6 +133,7 @@ def new_state(
         triage_reason="",
         research_plan=[],
         research_strategy="",
+        attachments=[],
         raw_research=[],
         research_quality=0.0,
         analyzed_data="",

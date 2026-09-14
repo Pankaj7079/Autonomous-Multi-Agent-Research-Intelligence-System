@@ -306,3 +306,85 @@ async def test_off_topic_sources_are_dropped_before_anything_reads_them(
 
     urls = [s["url"] for s in (await agent.run(state))["raw_research"]]
     assert urls == ["https://example.com/good"]
+
+
+async def test_an_attached_file_reaches_the_report_as_a_citable_source(
+    monkeypatch: pytest.MonkeyPatch, state
+) -> None:
+    """The whole point of an upload: its chunks are retrieved per task and cited like any source."""
+    state["research_plan"] = [{"task_id": "t1", "description": "what does the spec say"}]
+    state["attachments"] = [{"name": "spec.pdf", "url": "file://spec.pdf", "chunks": 3}]
+
+    async def fake_kb(query: str, limit: int = 5, session_id: str = "") -> list[dict[str, Any]]:
+        assert session_id == "test1234", "chunks must be scoped to this session"
+        return [
+            {
+                "text": "The supervisor decides at two gates.",
+                "url": "file://spec.pdf",
+                "title": "spec.pdf",
+                "score": 0.9,
+            },
+            {
+                "text": "The revision cap is two.",
+                "url": "file://spec.pdf",
+                "title": "spec.pdf",
+                "score": 0.8,
+            },
+        ]
+
+    monkeypatch.setattr("amaris.tools.vector_tool.search_knowledge_base", fake_kb)
+    agent = ResearcherAgent()
+    patch_invoke(monkeypatch, agent, ScriptedLLM(decision("stop", None, sufficient=True), "0.8"))
+
+    sources = (await agent.run(state))["raw_research"]
+    attached = [s for s in sources if s["url"] == "file://spec.pdf"]
+
+    # one source per file, not one per chunk, or a single pdf fills the whole reference list
+    assert len(attached) == 1
+    assert "two gates" in attached[0]["content"]
+    assert "revision cap" in attached[0]["content"]
+    assert attached[0]["title"] == "spec.pdf"
+
+
+async def test_an_attached_file_survives_the_relevance_floor(
+    monkeypatch: pytest.MonkeyPatch, state
+) -> None:
+    """The floor exists to drop junk search results. A file the user chose is not junk, even
+    when it shares no words with the question."""
+    state["research_plan"] = [{"task_id": "t1", "description": "find things"}]
+    state["attachments"] = [{"name": "notes.pdf", "url": "file://notes.pdf", "chunks": 1}]
+
+    async def fake_kb(query: str, limit: int = 5, session_id: str = "") -> list[dict[str, Any]]:
+        return [
+            {
+                "text": "Completely unrelated prose about gardening.",
+                "url": "file://notes.pdf",
+                "title": "notes.pdf",
+                "score": 0.1,
+            }
+        ]
+
+    monkeypatch.setattr("amaris.tools.vector_tool.search_knowledge_base", fake_kb)
+    agent = ResearcherAgent()
+    patch_invoke(monkeypatch, agent, ScriptedLLM(decision("stop", None, sufficient=True), "0.8"))
+
+    sources = (await agent.run(state))["raw_research"]
+    assert any(s["url"] == "file://notes.pdf" for s in sources)
+
+
+async def test_no_attachment_means_no_vector_lookup(monkeypatch: pytest.MonkeyPatch, state) -> None:
+    """An ordinary question must not pay a Qdrant round trip it has no use for."""
+    state["research_plan"] = [{"task_id": "t1", "description": "find things"}]
+    called = False
+
+    async def fake_kb(query: str, limit: int = 5, session_id: str = "") -> list[dict[str, Any]]:
+        nonlocal called
+        called = True
+        return []
+
+    monkeypatch.setattr("amaris.tools.vector_tool.search_knowledge_base", fake_kb)
+    agent = ResearcherAgent()
+    patch_invoke(monkeypatch, agent, ScriptedLLM(decision("stop", None, sufficient=True), "0.8"))
+
+    await agent.run(state)
+    assert not called

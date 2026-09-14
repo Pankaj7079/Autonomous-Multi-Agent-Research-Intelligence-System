@@ -107,7 +107,8 @@ class ResearcherAgent(BaseAgent):
         sources_outcomes = [
             outcome if isinstance(outcome, BaseException) else outcome[0] for outcome in outcomes
         ]
-        merged = self._merge(query, state["raw_research"], sources_outcomes, budget)
+        attached = await self._attachment_sources(state, tasks)
+        merged = self._merge(query, state["raw_research"], [*sources_outcomes, attached], budget)
         quality = await self._self_assess(query, merged, len(tasks))
         await self._remember(query, merged)
 
@@ -220,6 +221,63 @@ class ResearcherAgent(BaseAgent):
         )
         return await self._invoke_structured(prompt, ReActDecision)
 
+    async def _attachment_sources(
+        self, state: GraphState, tasks: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Retrieve the chunks of each attached file that match this plan, one source per file.
+
+        Retrieval is per task, so a long document contributes only the parts that matter. The
+        chunks are then folded back into a single source per file, or one PDF would occupy
+        every citation slot in the report.
+        """
+        attachments = state.get("attachments") or []
+        if not attachments:
+            return []
+
+        from amaris.tools.vector_tool import search_knowledge_base
+
+        session_id = state["session_id"]
+        top_k = self.settings.attachment_top_k
+        queries = [str(task.get("description", "")) for task in tasks] or [subject(state)]
+        results = await asyncio.gather(
+            *(search_knowledge_base(q, limit=top_k, session_id=session_id) for q in queries),
+            return_exceptions=True,
+        )
+
+        # url is the citation target, so chunks are grouped by the file they came from
+        excerpts: dict[str, list[str]] = {}
+        for result in results:
+            if isinstance(result, BaseException):
+                logger.bind(error=str(result)[:150]).warning("researcher.attachment_lookup_failed")
+                continue
+            for hit in result:
+                seen = excerpts.setdefault(hit["url"], [])
+                if hit["text"] not in seen:
+                    seen.append(hit["text"])
+
+        sources = []
+        for attachment in attachments:
+            url = str(attachment.get("url", ""))
+            chunks = excerpts.get(url)
+            if not chunks:
+                continue
+            sources.append(
+                {
+                    "title": str(attachment.get("name", url)),
+                    "url": url,
+                    "content": "\n\n".join(chunks)[: SNIPPET_CHARS * 6],
+                    "task_id": "attachment",
+                    "retrieved_at": datetime.now(UTC).isoformat(timespec="seconds"),
+                    # exempts it from the relevance floor in _merge — the user chose this file
+                    "from_attachment": True,
+                }
+            )
+
+        logger.bind(files=len(attachments), matched=len(sources)).info(
+            "researcher.attachments_used"
+        )
+        return sources
+
     async def _search(
         self, query: str, task_id: str, already: list[dict[str, Any]], max_results: int
     ) -> list[dict[str, Any]]:
@@ -287,7 +345,13 @@ class ResearcherAgent(BaseAgent):
                 merged.append(source)
 
         scored = [{**item, "relevance": score_source(query, item)} for item in merged]
-        kept = [item for item in scored if item["relevance"] >= self.settings.relevance_floor]
+        # an attached file is evidence the user chose deliberately, so it is never cut for
+        # scoring below the floor — that floor exists to drop junk search results
+        kept = [
+            item
+            for item in scored
+            if item["relevance"] >= self.settings.relevance_floor or item.get("from_attachment")
+        ]
         dropped = len(scored) - len(kept)
         # everything scoring zero would leave the writer with nothing, so keep the best available
         ranked = sorted(kept or scored, key=lambda item: item["relevance"], reverse=True)

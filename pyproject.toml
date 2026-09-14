@@ -76,6 +76,14 @@ observability = ["langsmith>=0.2.0", "langfuse>=2.0.0"]
 full = [
     "amaris[search,mcp,observability,evaluation]",
 ]
+# Attachment ingestion. pypdf is pure python; fastembed is ONNX and pulls no torch, and its
+# default model is 384-dim — the size vector_tool already creates the collection with, so
+# switching off sentence-transformers needs no migration. Images need no OCR dependency:
+# they go to the vision model already in the provider chain.
+files = [
+    "fastembed>=0.8.0",
+    "pypdf>=6.0.0",
+]
 
 [dependency-groups]
 dev = [

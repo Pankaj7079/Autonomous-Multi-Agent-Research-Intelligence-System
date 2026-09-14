@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import html
 from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
 import streamlit as st
 
@@ -22,6 +23,8 @@ if TYPE_CHECKING:
 TURNS = "turns"
 SELECTED = "selected_turn"
 PENDING = "pending"
+ATTACHMENTS = "attachments"
+ATTACHMENT_SESSION = "attachment_session"
 
 # the thread is a demo surface, not a transcript archive — old turns fall off the end
 MAX_TURNS = 12
@@ -60,6 +63,10 @@ def append(
 def clear() -> None:
     st.session_state.pop(TURNS, None)
     st.session_state.pop(SELECTED, None)
+    # a new conversation gets a new attachment scope; the old chunks stay in Qdrant but
+    # nothing can retrieve them again, which is what "start over" should mean
+    st.session_state.pop(ATTACHMENTS, None)
+    st.session_state.pop(ATTACHMENT_SESSION, None)
 
 
 def selected() -> dict[str, Any] | None:
@@ -109,13 +116,37 @@ def expand_request(turn: dict[str, Any]) -> dict[str, Any]:
         "expand_from_depth": depth_of(turn),
         "prior_sources": list(result.trace.sources) if result.trace else [],
         "history": history_payload()[:-1],
+        # the deeper pass must still see the uploaded file, or expanding loses it
+        "attachments": list(attachments()),
         "label": f"expanding to {NEXT_DEPTH.get(depth_of(turn), '')}",
     }
 
 
+def attachments() -> list[dict[str, Any]]:
+    """Files indexed in this browser session. They outlive a turn, so a document can be asked
+    several questions without re-uploading it."""
+    return st.session_state.setdefault(ATTACHMENTS, [])
+
+
+def attachment_session() -> str:
+    """One id for everything uploaded in this conversation — it scopes the Qdrant lookup.
+
+    Deliberately not a run's session_id: those change per turn, and a file uploaded for the
+    first question must still be retrievable by the third.
+    """
+    if ATTACHMENT_SESSION not in st.session_state:
+        st.session_state[ATTACHMENT_SESSION] = uuid4().hex
+    return str(st.session_state[ATTACHMENT_SESSION])
+
+
 def ask_request(query: str) -> dict[str, Any]:
     """A pending action for a new question, carrying the conversation so far."""
-    return {"query": query, "history": history_payload(), "label": "researching"}
+    return {
+        "query": query,
+        "history": history_payload(),
+        "attachments": list(attachments()),
+        "label": "researching",
+    }
 
 
 def _meta_html(turn: dict[str, Any]) -> str:

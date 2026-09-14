@@ -12,7 +12,9 @@ from amaris.config.settings import get_settings
 from amaris.observability.logging import logger
 
 COLLECTION = "amaris_research"
-EMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+# bge-small is 384-dim, the size this collection is already created with, so moving off
+# sentence-transformers needed no migration. fastembed runs it on ONNX and pulls no torch.
+EMBED_MODEL = "BAAI/bge-small-en-v1.5"
 VECTOR_SIZE = 384
 
 
@@ -21,28 +23,35 @@ class VectorHit(TypedDict):
 
     text: str
     url: str
+    title: str
     score: float
 
 
 @lru_cache(maxsize=1)
 def _embedder() -> Any | None:
-    """MiniLM from the `memory` extra. None when it isn't installed."""
+    """bge-small from the `files` extra. None when it isn't installed."""
     try:
-        from sentence_transformers import SentenceTransformer
+        from fastembed import TextEmbedding
     except ImportError:
         logger.bind(tool="vector", model=EMBED_MODEL).warning("tool.extra_missing")
         return None
-    return SentenceTransformer(EMBED_MODEL)
+    return TextEmbedding(model_name=EMBED_MODEL)
+
+
+async def _embed_many(texts: list[str]) -> list[list[float]] | None:
+    """Embed a batch in one pass. None when the extra is missing — never raises."""
+    model = _embedder()
+    if model is None or not texts:
+        return None
+    loop = asyncio.get_running_loop()
+    # embedding is CPU-bound, so it must not run on the event loop
+    vectors = await loop.run_in_executor(None, lambda: list(model.embed(texts)))
+    return [[float(value) for value in vector] for vector in vectors]
 
 
 async def _embed(text: str) -> list[float] | None:
-    model = _embedder()
-    if model is None:
-        return None
-    loop = asyncio.get_running_loop()
-    # encoding is CPU-bound, so it must not run on the event loop
-    vector = await loop.run_in_executor(None, lambda: model.encode(text).tolist())
-    return list(vector)
+    vectors = await _embed_many([text])
+    return vectors[0] if vectors else None
 
 
 def _client() -> Any | None:
@@ -101,8 +110,12 @@ async def ensure_collection() -> bool:
         await client.close()
 
 
-async def upsert_documents(documents: list[dict[str, Any]]) -> int:
-    """Store {text, url} documents. Returns how many landed, 0 on any failure."""
+async def upsert_documents(documents: list[dict[str, Any]], session_id: str = "") -> int:
+    """Store {text, url, title} documents. Returns how many landed, 0 on any failure.
+
+    `session_id` scopes the points to one run. The collection is shared, so an attachment
+    written without it would surface in someone else's search.
+    """
     if not documents or not await ensure_collection():
         return 0
 
@@ -113,20 +126,25 @@ async def upsert_documents(documents: list[dict[str, Any]]) -> int:
     try:
         from qdrant_client.models import PointStruct
 
-        points = []
-        for doc in documents:
-            vector = await _embed(doc.get("text", ""))
-            if vector is None:
-                return 0
-            points.append(
-                PointStruct(
-                    id=str(uuid.uuid4()),
-                    vector=vector,
-                    payload={"text": doc.get("text", ""), "url": doc.get("url", "")},
-                )
+        vectors = await _embed_many([str(doc.get("text", "")) for doc in documents])
+        if vectors is None:
+            return 0
+
+        points = [
+            PointStruct(
+                id=str(uuid.uuid4()),
+                vector=vector,
+                payload={
+                    "text": doc.get("text", ""),
+                    "url": doc.get("url", ""),
+                    "title": doc.get("title", ""),
+                    "session_id": session_id,
+                },
             )
+            for doc, vector in zip(documents, vectors, strict=True)
+        ]
         await client.upsert(collection_name=COLLECTION, points=points)
-        logger.bind(tool="vector", stored=len(points)).debug("tool.call")
+        logger.bind(tool="vector", stored=len(points), session_id=session_id).debug("tool.call")
         return len(points)
     except Exception as exc:
         logger.bind(tool="vector", error=str(exc)[:200]).warning("tool.failed")
@@ -135,8 +153,14 @@ async def upsert_documents(documents: list[dict[str, Any]]) -> int:
         await client.close()
 
 
-async def search_knowledge_base(query: str, limit: int = 5) -> list[VectorHit]:
-    """Semantic search over stored research. Returns [] when unavailable — never raises."""
+async def search_knowledge_base(
+    query: str, limit: int = 5, session_id: str = ""
+) -> list[VectorHit]:
+    """Semantic search over stored research. Returns [] when unavailable — never raises.
+
+    Pass `session_id` to see only what this run uploaded; without it the search spans
+    everything in the collection.
+    """
     started = time.perf_counter()
     vector = await _embed(query)
     if vector is None:
@@ -147,13 +171,26 @@ async def search_knowledge_base(query: str, limit: int = 5) -> list[VectorHit]:
         return []
 
     try:
+        query_filter = None
+        if session_id:
+            from qdrant_client.models import FieldCondition, Filter, MatchValue
+
+            query_filter = Filter(
+                must=[FieldCondition(key="session_id", match=MatchValue(value=session_id))]
+            )
+
         response = await client.query_points(
-            collection_name=COLLECTION, query=vector, limit=limit, with_payload=True
+            collection_name=COLLECTION,
+            query=vector,
+            limit=limit,
+            with_payload=True,
+            query_filter=query_filter,
         )
         hits = [
             VectorHit(
                 text=str((point.payload or {}).get("text", "")),
                 url=str((point.payload or {}).get("url", "")),
+                title=str((point.payload or {}).get("title", "")),
                 score=float(point.score),
             )
             for point in response.points

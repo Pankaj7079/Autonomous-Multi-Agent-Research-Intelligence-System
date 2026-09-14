@@ -17,6 +17,9 @@ JobState = Literal["queued", "running", "done", "failed"]
 
 # an expand reuses what the last turn gathered; 12 is the deepest budget's max_sources
 MAX_PRIOR_SOURCES = 12
+# each attached file becomes one citable source, so this is also a cap on how much of the
+# reference list one upload can occupy
+MAX_ATTACHMENTS = 5
 
 # progress is derived from which agent is active, not a real fraction — the path is
 # decided at runtime so an exact percentage would be a lie (docs/DESIGN.md)
@@ -65,12 +68,17 @@ class ResearchRequest(BaseModel):
     # set to the depth the previous turn ran at; triage bumps it and spends no model call
     expand_from_depth: str | None = None
     prior_sources: list[dict[str, Any]] = Field(default_factory=list, max_length=MAX_PRIOR_SOURCES)
+    # files already ingested into Qdrant for this session: [{name, url, chunks}]. The text is
+    # not carried here — the researcher retrieves what it needs by session_id.
+    attachments: list[dict[str, Any]] = Field(default_factory=list, max_length=MAX_ATTACHMENTS)
 
     def seed(self) -> dict[str, Any]:
         """What new_state() should carry forward. Empty dict for an ordinary first question."""
         seed: dict[str, Any] = {}
         if self.history:
             seed["history"] = [turn.model_dump() for turn in self.history]
+        if self.attachments:
+            seed["attachments"] = list(self.attachments)
         if self.expand_from_depth in DEPTHS:
             seed["query_depth"] = self.expand_from_depth
             seed["depth_locked"] = True

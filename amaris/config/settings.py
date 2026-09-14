@@ -76,6 +76,16 @@ class Settings(BaseSettings):
     # exactly the "weather API pricing" pages a "today's weather" query used to keep
     relevance_floor: float = Field(default=0.35, ge=0.0, le=1.0)
 
+    # attachments: extraction is capped so one upload cannot blow up every downstream prompt
+    attachment_max_bytes: int = Field(default=10_000_000, ge=1)
+    attachment_max_pages: int = Field(default=40, ge=1)
+    attachment_max_chars: int = Field(default=120_000, ge=1_000)
+    # ~1200 chars keeps a chunk inside bge-small's 512-token window with room to spare
+    attachment_chunk_chars: int = Field(default=1_200, ge=200)
+    attachment_chunk_overlap: int = Field(default=150, ge=0)
+    # how many document chunks the researcher may pull back per task
+    attachment_top_k: int = Field(default=4, ge=1)
+
     # groq's tokens-per-minute window is ~60s, so a shorter retry budget can never recover from it
     llm_retry_budget_seconds: float = Field(default=75.0, ge=0.0)
     # ragas makes one judge call per metric per context, so it needs its own ceiling

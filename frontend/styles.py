@@ -253,6 +253,7 @@ section[data-testid="stSidebar"] .chip {{
 .chip.on {{ color: var(--good); }}
 .chip.hot {{ color: var(--warn); }}
 .chip.off {{ color: var(--ghost); }}
+.chip.accent {{ color: var(--accent); background: var(--accent-soft); border-color: #cde6e2; }}
 
 /* ═══ the turn card — the centrepiece ══════════════════════════════════════ */
 .turn {{

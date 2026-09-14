@@ -35,6 +35,9 @@ HTTP_TIMEOUT_SECONDS = 30.0
 # mirrors ResearchRequest.query's min_length so both deployment modes reject the same input
 MIN_QUERY_CHARS = 3
 
+# what the composer's paperclip accepts; images are read by the vision model, not by OCR
+ATTACHMENT_TYPES = ["pdf", "png", "jpg", "jpeg", "webp"]
+
 # each one triages to a different depth, so clicking any of them shows the budget logic working
 EXAMPLES = (
     "what is the MCP protocol?",
@@ -57,7 +60,11 @@ def _boot() -> ConfigReport:
 
 def _payload(action: dict[str, Any]) -> dict[str, Any]:
     """The POST body for one pending action — a new question or an expand of an old one."""
-    body: dict[str, Any] = {"query": action["query"], "history": action.get("history", [])}
+    body: dict[str, Any] = {
+        "query": action["query"],
+        "history": action.get("history", []),
+        "attachments": action.get("attachments", []),
+    }
     if action.get("expand_from_depth"):
         body["expand_from_depth"] = action["expand_from_depth"]
         body["prior_sources"] = action.get("prior_sources", [])
@@ -155,6 +162,17 @@ def _sidebar(mode: str) -> None:
     provider_strip()
     st.caption("first is primary · a number is its cooldown")
 
+    files = thread.attachments()
+    if files:
+        label("attached", f"{len(files)}")
+        for item in files:
+            st.markdown(
+                f'<span class="chip accent"><span class="dot"></span>'
+                f"{html.escape(str(item['name']))} · {item['chunks']} chunks</span>",
+                unsafe_allow_html=True,
+            )
+        st.caption("retrieved per task, cited like any other source")
+
     label("this conversation")
     thread.thread_sidebar()
 
@@ -163,6 +181,37 @@ def _sidebar(mode: str) -> None:
         if st.button("start over", use_container_width=True):
             thread.clear()
             st.rerun()
+
+
+def _ingest_files(files: list[Any]) -> bool:
+    """Extract and index each attached file. False when one failed and the run must not start.
+
+    Ingestion happens here rather than inside an agent: it is I/O at the edge, like input
+    validation, and the same session id ties the stored chunks to this conversation.
+    """
+    from amaris.tools.attachments import AttachmentError, ingest
+
+    session_id = thread.attachment_session()
+    stored = thread.attachments()
+    known = {item["name"] for item in stored}
+
+    for upload in files:
+        if upload.name in known:
+            continue
+        try:
+            record = asyncio.run(
+                ingest(upload.name, upload.getvalue(), upload.type or "", session_id)
+            )
+        except AttachmentError as exc:
+            st.error(f"{upload.name}: {exc}")
+            return False
+        except Exception as exc:
+            logger.bind(file=upload.name, error=str(exc)[:200]).exception("frontend.ingest_failed")
+            st.error(f"{upload.name} could not be read: {exc}")
+            return False
+        stored.append(record)
+        st.toast(f"indexed {record['name']} — {record['chunks']} chunks")
+    return True
 
 
 def _examples() -> None:
@@ -243,11 +292,21 @@ def main() -> None:
                 report,
             )
 
-    asked = st.chat_input(
+    submitted = st.chat_input(
         "ask a follow-up…" if turns else "ask a research question…",
         key="composer",
+        accept_file="multiple",
+        file_type=ATTACHMENT_TYPES,
     )
-    if asked and asked.strip():
+    if not submitted:
+        return
+
+    # accept_file makes this a ChatInputValue rather than a str
+    asked = submitted.text or ""
+    if submitted.files and not _ingest_files(submitted.files):
+        return
+
+    if asked.strip():
         # the same floor ResearchRequest enforces, checked here so cloud mode rejects a
         # two-character question as readably as the API does instead of raising mid-run
         if len(asked.strip()) < MIN_QUERY_CHARS:
@@ -258,6 +317,9 @@ def main() -> None:
             st.error(guard.reason)
             return
         st.session_state[thread.PENDING] = thread.ask_request(guard.text.strip())
+        st.rerun()
+    elif submitted.files:
+        # a file with no question is a valid thing to do — it is ready for the next question
         st.rerun()
 
 
