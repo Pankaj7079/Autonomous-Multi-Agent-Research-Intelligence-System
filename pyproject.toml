@@ -1,11 +1,9 @@
-# AMARIS — project + tooling definition.
-# uv is the only supported package manager here. `uv sync` installs the core
-# stack; the heavyweight extras are opt-in on purpose (see ADR-009).
+# AMARIS — 
 
 [project]
 name = "amaris"
 version = "0.1.0"
-description = "AMARIS — Autonomous Multi-Agent Research Intelligence System"
+description = "AMARIS — Autonomous Multi-Agent Research & Intelligence System"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 license = { text = "MIT" }
@@ -55,8 +53,6 @@ dependencies = [
 search = ["tavily-python>=0.5.0"]
 
 # Crawl4AI pulls playwright and a browser download. Local dev wants it; a
-# Streamlit Cloud deploy usually cannot afford it, and scraper_tool degrades
-# to search snippets when the import fails.
 scraping = ["crawl4ai>=0.4.0"]
 
 # sentence-transformers pulls torch (~2GB). Only needed when mem0 runs with

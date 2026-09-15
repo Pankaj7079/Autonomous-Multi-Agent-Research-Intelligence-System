@@ -108,7 +108,10 @@ class ResearcherAgent(BaseAgent):
             outcome if isinstance(outcome, BaseException) else outcome[0] for outcome in outcomes
         ]
         attached = await self._attachment_sources(state, tasks)
-        merged = self._merge(query, state["raw_research"], [*sources_outcomes, attached], budget)
+        from_mcp = await self._mcp_sources(tasks, query)
+        merged = self._merge(
+            query, state["raw_research"], [*sources_outcomes, attached, from_mcp], budget
+        )
         quality = await self._self_assess(query, merged, len(tasks))
         await self._remember(query, merged)
 
@@ -220,6 +223,40 @@ class ResearcherAgent(BaseAgent):
             max_iterations=max_iterations,
         )
         return await self._invoke_structured(prompt, ReActDecision)
+
+    async def _mcp_sources(self, tasks: list[dict[str, Any]], query: str) -> list[dict[str, Any]]:
+        """Evidence from connected MCP servers, one source per server (ADR-042).
+
+        Empty whenever none are reachable, which is the normal state in cloud mode — there is
+        no node runtime there to start a stdio server with.
+        """
+        from amaris.tools.mcp_client import configured_servers, search
+
+        specs = configured_servers()
+        if not specs:
+            return []
+
+        # the first task stands for the run: one call per server, not one per task, or a
+        # 5-task plan pays five cold `npx` starts
+        subject_query = str(tasks[0].get("description", "")) if tasks else query
+        found = await asyncio.gather(
+            *(search(spec, subject_query) for spec in specs), return_exceptions=True
+        )
+
+        sources = []
+        for spec, item in zip(specs, found, strict=False):
+            if isinstance(item, BaseException):
+                logger.bind(server=spec.name, error=str(item)[:150]).warning(
+                    "researcher.mcp_failed"
+                )
+                continue
+            if item:
+                sources.append(
+                    {**item, "retrieved_at": datetime.now(UTC).isoformat(timespec="seconds")}
+                )
+
+        logger.bind(servers=len(specs), sources=len(sources)).info("researcher.mcp_done")
+        return sources
 
     async def _attachment_sources(
         self, state: GraphState, tasks: list[dict[str, Any]]

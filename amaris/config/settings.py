@@ -40,6 +40,13 @@ class Settings(BaseSettings):
     glm_api_key: SecretStr | None = None
     anthropic_api_key: SecretStr | None = None
     tavily_api_key: SecretStr | None = None
+    # a classic PAT is enough for the remote GitHub MCP endpoint; no OAuth app needed
+    github_token: SecretStr | None = None
+    # off by default: a research run would otherwise spawn npx/uvx subprocesses, which is a
+    # surprise in tests and a cold start in cloud mode where no node runtime exists
+    mcp_client_enabled: bool = False
+    # empty disables the filesystem MCP server: pointing an agent at a whole disk is not a default
+    mcp_filesystem_root: str = ""
 
     log_level: str = "INFO"
     log_dir: str = "./logs"

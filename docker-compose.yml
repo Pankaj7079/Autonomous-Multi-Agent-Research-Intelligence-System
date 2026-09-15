@@ -1,4 +1,4 @@
-# Local dev services only. Cloud mode runs without any of this — see ADR-008.
+# Local dev services only. Cloud mode runs without any of this — 
 #   docker compose up -d                      redis + qdrant
 #   docker compose --profile obs up -d        + langfuse tracing
 

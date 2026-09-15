@@ -9,6 +9,7 @@ from amaris.agents.base_agent import BaseAgent
 from amaris.agents.triage import budget_for, format_history
 from amaris.graph.state import subject
 from amaris.observability.logging import logger
+from amaris.safety.injection import wrap_untrusted
 from amaris.tools.relevance import select_for_prompt
 
 if TYPE_CHECKING:
@@ -233,8 +234,11 @@ class WriterAgent(BaseAgent):
         """Content included — a writer given only titles invents the rest."""
         if not citations:
             return "no sources available — say so explicitly instead of inventing citations"
-        return "\n\n".join(
+        blocks = "\n\n".join(
             f"[{citation['index']}] {citation['title']} — {citation['url']}\n"
             f"{source.get('content', '')[:SOURCE_CHARS]}"
             for citation, source in zip(citations, sources, strict=False)
         )
+        # the writer reads scraped pages and MCP output like every other agent, and was the one
+        # agent handed them unwrapped — an instruction inside a README is an injection here
+        return wrap_untrusted(blocks)

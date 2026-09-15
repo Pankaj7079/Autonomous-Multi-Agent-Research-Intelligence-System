@@ -14,7 +14,7 @@ import httpx
 import streamlit as st
 from websockets.asyncio.client import connect
 
-from amaris.agents.triage import DEPTH_BUDGETS, budget_for
+from amaris.agents.triage import budget_for
 from amaris.api.schemas import (
     DONE_PROGRESS,
     ProgressEvent,
@@ -30,7 +30,6 @@ from amaris.observability.logging import configure_from_settings, logger
 from amaris.safety.guardrails import validate_input
 from frontend import thread
 from frontend.components import (
-    AGENT_ROWS,
     agent_list,
     asking,
     depth_table,
@@ -268,10 +267,10 @@ def _sidebar(mode: str) -> None:
     with st.expander(summary, expanded=degraded):
         system_panel(capabilities)
 
-    with st.expander(f"Agents"):
+    with st.expander("Agents"):
         agent_list()
 
-    with st.expander(f"Depth budgets"):
+    with st.expander("Depth budgets"):
         depth_table()
 
     # last, under every panel that describes the system: this one is about the session, and it
