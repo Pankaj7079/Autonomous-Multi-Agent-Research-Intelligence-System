@@ -125,6 +125,8 @@ class RunTrace(BaseModel):
     sources: list[dict[str, Any]] = Field(default_factory=list)
     # what triage decided, and therefore what every budget downstream was set from
     triage: dict[str, Any] = Field(default_factory=dict)
+    # the citation audit: which cited claims were found in the pages they cite (ADR-039)
+    audit: dict[str, Any] = Field(default_factory=dict)
 
 
 class ResearchResult(BaseModel):
@@ -248,6 +250,7 @@ def result_from_state(state: GraphState) -> ResearchResult:
             routing_hint=state["routing_hint"],
             quality_score=state["quality_score"],
             sources=[_trim_source(item) for item in state["raw_research"]],
+            audit=state.get("citation_audit") or {},
             triage={
                 "depth": state.get("query_depth", ""),
                 "answerable": state.get("answerable", True),

@@ -101,6 +101,8 @@ class GraphState(TypedDict):
     # evaluator
     final_report: str
     evaluation_scores: dict[str, float]
+    # what the report's citations actually support, checked without a model call (ADR-039)
+    citation_audit: dict[str, Any]
 
     # set by any node that failed; the supervisor sees it and routes to FINISH
     error: str | None
@@ -152,6 +154,7 @@ def new_state(
         react_stats={},
         final_report="",
         evaluation_scores={},
+        citation_audit={},
         error=None,
     )
     for key in SEEDABLE:

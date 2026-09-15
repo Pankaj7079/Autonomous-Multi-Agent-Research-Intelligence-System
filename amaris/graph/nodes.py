@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -15,8 +14,6 @@ from amaris.agents import (
     TriageAgent,
     WriterAgent,
 )
-from amaris.evaluation.report_eval import ReportEvaluator
-from amaris.evaluation.retrieval_eval import RetrievalEvaluator
 
 # GraphState must exist at runtime: langgraph resolves node annotations when compiling
 from amaris.graph.state import FINISH, GraphState
@@ -113,30 +110,35 @@ async def critic_node(state: GraphState) -> dict[str, Any]:
     return await _run_node(CriticAgent, state)
 
 
-async def _safe_scores(state: GraphState) -> dict[str, float]:
-    """Layers 1+2, or {} if the judge is unavailable. Scoring must never cost us a finished report."""
+def _audit(state: GraphState) -> dict[str, Any]:
+    """Check the report against the pages it cites. No model call, so it cannot fail a run.
+
+    This replaced RAGAS on the request path (ADR-039). RAGAS is a benchmark for the golden set
+    in `evaluation/harness.py`; running it per question spent ~40s of the user's wait on four
+    numbers they never asked for, after the answer was already finished.
+    """
+    from amaris.evaluation.citation_audit import audit, caveat
+
     try:
-        # gather, not sequential — two independent judges ran back to back and added ~25s
-        # to every run, on top of a report that was already finished
-        retrieval_results, report_results = await asyncio.gather(
-            RetrievalEvaluator().evaluate(state), ReportEvaluator().evaluate(state)
+        result = audit(
+            state["final_report"] or state["draft_report"],
+            state["citations"],
+            state["raw_research"],
         )
     except Exception as exc:
-        logger.bind(error=str(exc)[:200]).warning("evaluator.scoring_failed")
+        # a failed audit must never cost a finished report, same rule the judge had
+        logger.bind(error=str(exc)[:200]).warning("evaluator.audit_failed")
         return {}
-
-    # a metric the judge never scored is omitted, not stored as 0.0 — "not scored" and
-    # "scored zero" mean opposite things and the ui cannot tell them apart downstream
-    scores = {r.metric: r.score for r in (*retrieval_results, *report_results) if r.scored}
-    scores["overall"] = round(sum(scores.values()) / len(scores), 4) if scores else 0.0
-    return scores
+    return {**result.as_dict(), "caveat": caveat(result)}
 
 
 async def evaluator_node(state: GraphState) -> dict[str, Any]:
-    """Terminal node: promotes the draft to final, scores Layers 1+2 inline, records the session.
+    """Terminal node: promotes the draft to final, audits its citations, records the session.
 
-    Layer 3 (trajectory) needs the full decision_log a finished run leaves behind and is meant
-    for offline regression runs, not per-request cost — it runs from the harness only (ADR-017).
+    No judge runs here any more. RAGAS scores the golden set offline in `evaluation/harness.py`,
+    which is what a benchmark is for; per question it spent ~40s on four numbers the reader
+    never asked for, after the answer was already written (ADR-039). Layer 3 (trajectory) is
+    offline for the same reason (ADR-017).
     """
     report = state["draft_report"]
     if not report and state["error"]:
@@ -146,10 +148,10 @@ async def evaluator_node(state: GraphState) -> dict[str, Any]:
     # promoted before scoring: a judge failure used to take the finished report down with it
     state = {**state, "final_report": report}
 
-    scores = await _safe_scores(state)
+    audit = _audit(state)
 
     try:
-        await add_session_summary(state["original_query"], report, scores)
+        await add_session_summary(state["original_query"], report, {})
     except Exception as exc:
         logger.bind(error=str(exc)[:150]).warning("evaluator.memory_failed")
 
@@ -157,12 +159,12 @@ async def evaluator_node(state: GraphState) -> dict[str, Any]:
         chars=len(report),
         sources=len(state["raw_research"]),
         score=round(state["quality_score"], 2),
-        eval_overall=scores.get("overall", 0.0),
+        grounded=f"{audit.get('grounded', 0)}/{audit.get('checked', 0)}",
         path=" → ".join(state["agent_path"]),
     ).info("run.complete")
 
     return {
         "final_report": report,
-        "evaluation_scores": scores,
+        "citation_audit": audit,
         "agent_path": [*state["agent_path"], "evaluator"],
     }

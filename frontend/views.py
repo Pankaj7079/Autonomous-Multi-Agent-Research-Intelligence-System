@@ -11,11 +11,11 @@ from amaris.config.settings import get_settings
 from frontend.components import (
     agent_timeline,
     analysis_view,
+    citation_audit,
     critic_verdict,
     decision_trace,
     describe,
     duration_chart,
-    evaluation_layers,
     event_log,
     kv_rows,
     label,
@@ -100,12 +100,12 @@ def _sources_tab(result: ResearchResult) -> None:
 
 
 def _evaluation_tab(result: ResearchResult) -> None:
-    label("critic scores", "layer 3")
+    label("critic scores", "in-run review")
     describe("answer_fit caps the overall, so a polished answer to the wrong question cannot pass.")
     score_dashboard(result.scores)
-    label("ragas evaluation", "layers 1-2")
-    describe("A separate judge. A rate-limited run reads 'not scored', never zero.")
-    evaluation_layers(result.scores)
+    label("citation audit", "no model call")
+    describe("Every figure in the answer, looked up in the page that sentence cites.")
+    citation_audit(result.trace.audit if result.trace else {})
 
 
 def system_tab(report: ConfigReport | None = None) -> None:
@@ -114,7 +114,9 @@ def system_tab(report: ConfigReport | None = None) -> None:
     left, right = st.columns(2, gap="medium")
     with left:
         label("model routing")
-        describe("Tried in order, falling through on a rate limit. The judge uses a different one.")
+        describe(
+            "Tried in order, falling through on a rate limit. The offline judge uses the tail."
+        )
         kv_rows(
             {
                 "primary": settings.primary_provider,
@@ -150,7 +152,7 @@ def system_tab(report: ConfigReport | None = None) -> None:
                 "react cap": str(settings.max_react_iterations),
                 "supervisor cap": str(settings.max_supervisor_steps),
                 "retry budget": f"{settings.llm_retry_budget_seconds:.0f}s",
-                "ragas timeout": f"{settings.ragas_timeout_seconds:.0f}s",
+                "ragas timeout": f"{settings.ragas_timeout_seconds:.0f}s (offline only)",
             },
             boxed=True,
         )

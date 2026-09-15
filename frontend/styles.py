@@ -639,6 +639,16 @@ section[data-testid="stSidebar"] [data-testid="stCaptionContainer"] p {{
    that also matches the answer paragraph and would set the actual answer in 8pt mono */
 .turn-a br {{ line-height: 2.15; }}
 
+/* the answer says when its own evidence is thin, rather than letting a weak answer look
+   exactly like a strong one. amber, not red: an unverified claim is a caution, not a failure */
+.caveat {{
+  display: flex; align-items: flex-start; gap: 0.6rem;
+  background: #fdf8f0; border: 1px solid #ecd5ad; border-radius: var(--r);
+  padding: 0.7rem 0.9rem; margin-top: 1.1rem;
+  font-size: 0.82rem; line-height: 1.55; color: var(--warn);
+}}
+.caveat .ic {{ flex: none; line-height: 1.5; }}
+
 /* instrument strip at the foot of a turn */
 .turn-meta {{
   display: flex; align-items: center; gap: 0.8rem; flex-wrap: wrap;

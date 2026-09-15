@@ -59,13 +59,10 @@ def wire(monkeypatch: pytest.MonkeyPatch, depth: str, critic_update: dict[str, A
     )
     monkeypatch.setattr(nodes_module, "CriticAgent", stub("critic", critic_update))
 
-    async def no_scores(state: Any) -> dict[str, float]:
-        return {}
-
     async def no_memory(*args: Any, **kwargs: Any) -> None:
         return None
 
-    monkeypatch.setattr(nodes_module, "_safe_scores", no_scores)
+    # no judge to stub out any more — the evaluator's citation audit is pure and free (ADR-039)
     monkeypatch.setattr(nodes_module, "add_session_summary", no_memory)
 
 

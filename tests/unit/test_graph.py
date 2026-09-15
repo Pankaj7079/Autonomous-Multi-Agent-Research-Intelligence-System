@@ -155,55 +155,63 @@ async def test_evaluator_explains_a_failed_run_instead_of_returning_nothing() ->
     assert "rate limited" in report
 
 
-async def test_a_nan_metric_is_omitted_rather_than_stored_as_zero(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Found live: faithfulness NaNs while its siblings score. Storing 0.0 would publish
-    'the report is unfaithful' when the truth is 'the judge never answered'."""
-    from amaris.evaluation.base import EvalResult, zero_result
+async def test_the_evaluator_spends_no_model_call_on_a_finished_report(monkeypatch) -> None:
+    """RAGAS used to run here on every question — ~40s for four numbers the reader never asked
+    for, after the answer was already written. It now benchmarks the golden set offline, and
+    the per-request signal is a citation audit that cannot rate-limit because it is pure."""
     from amaris.graph import nodes
-
-    class FakeRetrieval:
-        async def evaluate(self, state, reference=None):
-            return [
-                EvalResult(
-                    layer="retrieval",
-                    metric="context_precision",
-                    score=1.0,
-                    passed=True,
-                    detail="2 sources scored against the query",
-                )
-            ]
-
-    class FakeReport:
-        async def evaluate(self, state, reference=None):
-            return [
-                zero_result("report", "faithfulness", "judge returned NaN — likely rate limited"),
-                EvalResult(
-                    layer="report",
-                    metric="answer_relevancy",
-                    score=0.85,
-                    passed=True,
-                    detail="ok",
-                ),
-            ]
-
-    monkeypatch.setattr(nodes, "RetrievalEvaluator", FakeRetrieval)
-    monkeypatch.setattr(nodes, "ReportEvaluator", FakeReport)
 
     async def no_memory(*args, **kwargs):
         return None
 
     monkeypatch.setattr(nodes, "add_session_summary", no_memory)
 
-    state = new_state("q")
-    state["draft_report"] = "# Report"
+    state = new_state("what is mango?")
+    state["draft_report"] = "India grew 24.7 million tonnes of mango in 2023 [1]."
+    state["citations"] = [{"index": 1, "url": "https://a.com", "title": "Mango"}]
+    state["raw_research"] = [
+        {"url": "https://a.com", "content": "India grew 24.7 million tonnes of mango in 2023."}
+    ]
+
     result = await nodes.evaluator_node(state)
 
-    scores = result["evaluation_scores"]
-    assert "faithfulness" not in scores, "an unscored metric must be absent, not zero"
-    assert scores["context_precision"] == 1.0
-    assert scores["answer_relevancy"] == 0.85
+    audit = result["citation_audit"]
+    assert audit["checked"] == 1
+    assert audit["grounded"] == 1
+    assert audit["dead"] == 0
+    # the evaluator no longer produces judge scores at all
+    assert "evaluation_scores" not in result
+
+
+async def test_a_claim_whose_page_does_not_back_it_is_named_not_averaged(monkeypatch) -> None:
+    """The reason RAGAS went: one faithfulness number averages away the claim that is wrong.
+    A report can score 0.94 as a whole and 0.61 per claim."""
+    from amaris.graph import nodes
+
+    async def no_memory(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(nodes, "add_session_summary", no_memory)
+
+    state = new_state("what is mango?")
+    state["draft_report"] = "The fruit can weigh 2.5 kg [1]. It cures diabetes in 92% of cases [2]."
+    state["citations"] = [
+        {"index": 1, "url": "https://a.com"},
+        {"index": 2, "url": "https://b.com"},
+    ]
+    state["raw_research"] = [
+        {"url": "https://a.com", "content": "A mango can weigh 2.5 kg when ripe."},
+        {"url": "https://b.com", "content": "An article about container orchestration."},
+    ]
+
+    audit = (await nodes.evaluator_node(state))["citation_audit"]
+
+    assert audit["grounded"] == 1 and audit["unsupported"] == 1
+    unsupported = [c for c in audit["claims"] if not c["grounded"]]
+    assert "diabetes" in unsupported[0]["text"]
+    # and the answer names the figure it could not find, rather than looking as confident
+    # as a verified one
+    assert "92%" in audit["caveat"]
 
 
 async def test_checkpoint_pruning_keeps_only_recent_threads(tmp_path, monkeypatch) -> None:

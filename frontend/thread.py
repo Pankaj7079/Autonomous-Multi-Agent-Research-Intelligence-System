@@ -193,6 +193,24 @@ def ask_request(query: str, depth: str = "") -> dict[str, Any]:
     }
 
 
+def _caveat_html(turn: dict[str, Any]) -> str:
+    """Say out loud when the evidence does not support the answer. "" when it does.
+
+    Claude's research mode is the model here: it states when the evidence is thin rather than
+    presenting a weak answer with the confidence of a strong one. The line is written by the
+    citation audit, which checked the cited pages without a model call.
+    """
+    result = turn.get("result")
+    if result is None or result.trace is None:
+        return ""
+    line = str(result.trace.audit.get("caveat", "")).strip()
+    if not line:
+        return ""
+    return (
+        f'<div class="caveat"><span class="ic">&#9888;</span><span>{html.escape(line)}</span></div>'
+    )
+
+
 def _meta_html(turn: dict[str, Any]) -> str:
     """The instrument strip under an answer: did it pass, and what did it cost."""
     result = turn.get("result")
@@ -258,7 +276,7 @@ def turn_card(turn: dict[str, Any], index: int, *, is_last: bool) -> None:
         f'<div class="turn-head"><span class="who">question</span>'
         f'<span class="rule"></span>{depth_tag}</div>'
         f'<div class="turn-q">{html.escape(str(turn["query"]))}</div>'
-        f"{body}{_meta_html(turn)}</div>",
+        f"{body}{_caveat_html(turn)}{_meta_html(turn)}</div>",
         unsafe_allow_html=True,
     )
 

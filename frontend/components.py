@@ -495,27 +495,63 @@ def critic_verdict(trace: RunTrace | None) -> None:
         st.markdown(trace.critic_feedback)
 
 
-def evaluation_layers(scores: dict[str, float]) -> None:
-    """Layers 1 and 2, with unscored metrics named as unscored instead of shown as 0.00."""
-    floor = get_settings().quality_approve_threshold
-    rows = []
-    for metric in EVAL_METRICS:
-        value = scores.get(f"eval_{metric}")
-        if value is None:
-            rows.append(
-                f"<tr><td>{metric.replace('_', ' ')}</td>"
-                '<td class="unscored">not scored — judge unavailable</td></tr>'
-            )
-        else:
-            rows.append(
-                f"<tr><td>{metric.replace('_', ' ')}</td>"
-                f'<td class="v-{badge_class(value, floor)}">{value:.2f}</td></tr>'
-            )
+def citation_audit(audit: dict[str, Any]) -> None:
+    """What the report claimed and whether the cited pages back it up.
+
+    This replaced four RAGAS numbers. A single `faithfulness: 0.87` averaged away the claims
+    that were actually wrong — a report can score 0.94 as a whole and 0.61 per claim. Here the
+    figures and names in each cited sentence are looked up in the page we stored, so a claim
+    that is not in its source is named rather than averaged.
+    """
+    if not audit:
+        st.caption("no citations to check — this answer cited nothing")
+        return
+
+    checked = int(audit.get("checked", 0))
+    grounded = int(audit.get("grounded", 0))
+    ratio = float(audit.get("grounded_ratio", 0.0))
+    cells = [
+        ("verified claims", f"{grounded}/{checked}", badge_class(ratio, 0.8) if checked else ""),
+        # prose with no figure or name in it cannot be checked without a model, and saying so is
+        # more honest than folding it into the score either way
+        ("not checkable", str(audit.get("skipped", 0)), ""),
+        ("cited sources", str(audit.get("cited_sources", 0)), ""),
+        ("domains", str(audit.get("domains", 0)), ""),
+        ("dead citations", str(audit.get("dead", 0)), "bad" if audit.get("dead") else ""),
+    ]
+    dated = int(audit.get("dated", 0))
+    if dated:
+        cells.append((f"recent of {dated} dated", str(audit.get("recent", 0)), ""))
     st.markdown(
-        '<table class="tbl"><thead><tr><th>metric</th><th>score</th></tr></thead>'
-        f"<tbody>{''.join(rows)}</tbody></table>",
+        '<div class="metrics">'
+        + "".join(
+            f'<div class="metric {state}"><div class="k">{k}</div>'
+            f'<div class="v">{html.escape(v)}</div></div>'
+            for k, v, state in cells
+        )
+        + "</div>",
         unsafe_allow_html=True,
     )
+
+    failed = [c for c in audit.get("claims", []) if not c.get("grounded")]
+    if not failed:
+        return
+    with st.expander(f"claims whose facts are not in the page they cite ({len(failed)})"):
+        st.caption(
+            "A literal lookup in the stored page, not a model's opinion. The right column is what "
+            "was asserted and not found — it is a prompt to go and look, not a verdict."
+        )
+        rows = "".join(
+            f"<tr><td>[{c.get('citation')}]</td>"
+            f"<td>{html.escape(str(c.get('text', ''))[:300])}</td>"
+            f"<td>{html.escape(', '.join(str(m) for m in c.get('missing', [])) or c.get('reason', ''))}</td></tr>"
+            for c in failed
+        )
+        st.markdown(
+            '<table class="tbl"><thead><tr><th>cite</th><th>claim</th><th>not found</th>'
+            f"</tr></thead><tbody>{rows}</tbody></table>",
+            unsafe_allow_html=True,
+        )
 
 
 def source_list(citations: list[dict[str, Any]], sources: list[dict[str, Any]]) -> None:

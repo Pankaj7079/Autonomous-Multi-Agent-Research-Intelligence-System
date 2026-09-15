@@ -151,16 +151,72 @@ def test_score_dashboard_draws_the_four_critic_dimensions(fake: FakeStreamlit) -
     assert "metric bad" in drawn
 
 
-def test_an_absent_eval_metric_reads_as_not_scored(fake: FakeStreamlit) -> None:
-    """A rate-limited judge omits the metric; showing 0.00 would claim the run was bad."""
-    components.evaluation_layers({"faithfulness": 0.9})
-    assert "not scored" in fake.drawn
+def test_an_answer_with_no_citations_says_so_rather_than_showing_zeroes(
+    fake: FakeStreamlit,
+) -> None:
+    """Empty metrics read as a bad run; "cited nothing" reads as what actually happened."""
+    components.citation_audit({})
+    assert fake.captions
+    assert "cited nothing" in " ".join(fake.captions)
 
 
-def test_a_real_eval_zero_is_still_shown_as_zero(fake: FakeStreamlit) -> None:
-    components.evaluation_layers({"eval_faithfulness": 0.0})
-    assert "0.00" in fake.drawn
-    assert "not scored" not in fake.drawn.split("faithfulness")[1][:60]
+def test_an_unsupported_claim_is_named_rather_than_averaged_into_a_score(
+    fake: FakeStreamlit,
+) -> None:
+    """The whole reason RAGAS left the request path: a single faithfulness number hides the
+    one claim that is wrong. The claim itself has to be reachable from the UI."""
+    components.citation_audit(
+        {
+            "checked": 2,
+            "grounded": 1,
+            "unsupported": 1,
+            "grounded_ratio": 0.5,
+            "dead": 0,
+            "cited_sources": 2,
+            "domains": 2,
+            "dated": 0,
+            "recent": 0,
+            "claims": [
+                {
+                    "text": "Mango is a stone fruit [1].",
+                    "citation": 1,
+                    "grounded": True,
+                    "missing": [],
+                },
+                {
+                    "text": "Mango cures diabetes in 92% of cases [2].",
+                    "citation": 2,
+                    "grounded": False,
+                    "missing": ["92%"],
+                },
+            ],
+        }
+    )
+    drawn = fake.drawn
+    assert "1/2" in drawn
+    assert "cures diabetes" in drawn
+    # the reader is told which fact to go and look at, not given a score to interpret
+    assert "92%" in drawn
+
+
+def test_a_dead_citation_is_flagged_as_bad_not_merely_counted(fake: FakeStreamlit) -> None:
+    """A citation pointing at a page that was never stored is unverifiable, which is worse
+    than a low score — the reader cannot check it at all."""
+    components.citation_audit(
+        {
+            "checked": 1,
+            "grounded": 0,
+            "unsupported": 1,
+            "grounded_ratio": 0.0,
+            "dead": 1,
+            "cited_sources": 1,
+            "domains": 1,
+            "dated": 0,
+            "recent": 0,
+            "claims": [],
+        }
+    )
+    assert "metric bad" in fake.drawn
 
 
 def test_no_critic_scores_says_so_instead_of_drawing_empty_badges(fake: FakeStreamlit) -> None:
