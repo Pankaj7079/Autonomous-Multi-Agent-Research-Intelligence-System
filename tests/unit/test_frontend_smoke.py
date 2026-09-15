@@ -21,18 +21,21 @@ def test_the_app_renders_without_raising() -> None:
     assert app.chat_input
 
 
-def test_the_empty_state_is_the_mark_the_numbers_and_the_agents() -> None:
+def test_the_empty_state_is_the_mark_and_the_numbers() -> None:
     """The routing transcript, depth table and GraphState list were removed — they explained
-    the system in prose. The stat strip and agent grid stayed, because they show it."""
+    the system in prose. The agents moved to the sidebar, where they describe the system next
+    to the other panels rather than filling the page a question is asked on."""
     app = streamlit_testing.AppTest.from_file(APP, default_timeout=30).run()
     drawn = "".join(b.value for b in app.markdown if "<style>" not in b.value)
 
     assert 'class="hero"' in drawn
     assert 'class="tagline"' in drawn
-    assert 'class="stats"' in drawn
-    assert 'class="agents"' in drawn
-    # the supervisor card is marked because deciding is its whole job
-    assert 'class="agent core"' in drawn
+    # the stat strip was removed: four headline numbers framing a system the reader has not
+    # asked anything of yet is a brochure, and the sidebar panels carry the same facts
+    assert 'class="stats"' not in drawn
+    # the supervisor row is marked in the sidebar list because deciding is its whole job
+    assert 'class="ag-row core"' in drawn
+    assert 'class="agents"' not in drawn
     assert 'class="trace"' not in drawn
 
 
@@ -57,9 +60,11 @@ def test_the_empty_state_offers_real_questions_but_no_explainer_paragraph() -> N
     # bare keyword chips were the filler that got removed; full questions are the replacement
     assert not any(label in ("mcp", "langgraph vs crewai") for label in labels)
     assert 'class="lede"' not in drawn
-    # the wordmark and its one line are what remain
+    # the wordmark and its one line are what remain. the line is asserted by element and by
+    # its claim, not word for word, so rewording the copy is not a test failure
     assert "AMA" in drawn and "RIS" in drawn
-    assert "show every decision" in drawn
+    assert 'class="tagline"' in drawn
+    assert "decision" in drawn
 
 
 def test_the_wordmark_has_no_flex_gap_between_its_halves() -> None:

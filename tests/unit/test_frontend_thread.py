@@ -61,17 +61,17 @@ def test_sources_are_deduped_across_turns(fake: FakeStreamlit) -> None:
     ]
 
     totals = thread.session_totals()
-    assert totals["sources"] == "3"
-    assert totals["avg score"] == "0.88"
-    assert totals["routing"] == "4"
+    assert totals["Sources"] == "3"
+    assert totals["Avg score"] == "0.88"
+    assert totals["Routing"] == "4"
 
 
 def test_elapsed_switches_to_minutes_once_a_conversation_is_long(fake: FakeStreamlit) -> None:
     fake.session_state[thread.TURNS] = [_turn("q", "a", 0.9, ["https://a.com"], 45.0)]
-    assert thread.session_totals()["elapsed"] == "45s"
+    assert thread.session_totals()["Elapsed"] == "45s"
 
     fake.session_state[thread.TURNS] = [_turn("q", "a", 0.9, ["https://a.com"], 200.0)]
-    assert thread.session_totals()["elapsed"] == "3.3m"
+    assert thread.session_totals()["Elapsed"] == "3.3m"
 
 
 def test_a_failed_turn_is_counted_in_time_but_not_in_the_average(fake: FakeStreamlit) -> None:
@@ -87,8 +87,8 @@ def test_a_failed_turn_is_counted_in_time_but_not_in_the_average(fake: FakeStrea
     fake.session_state[thread.TURNS] = [failed, _turn("q1", "a1", 0.80, ["https://a.com"], 50.0)]
 
     totals = thread.session_totals()
-    assert totals["avg score"] == "0.80"
-    assert totals["elapsed"] == "1.0m"
+    assert totals["Avg score"] == "0.80"
+    assert totals["Elapsed"] == "1.0m"
 
 
 def test_the_transcript_keeps_every_turn_in_order_with_its_question(fake: FakeStreamlit) -> None:

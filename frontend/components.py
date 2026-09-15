@@ -58,6 +58,12 @@ def label(text: str, note: str = "", hint: str = "") -> None:
     st.markdown(f'<div class="lbl">{html.escape(text)}{extra}</div>{under}', unsafe_allow_html=True)
 
 
+def panel_note(text: str) -> None:
+    """The one line saying what a sidebar panel is. Outside the panel, so a collapsed one
+    still says what it holds — inside it, the description only appeared once you already knew."""
+    st.markdown(f'<div class="panel-note">{html.escape(text)}</div>', unsafe_allow_html=True)
+
+
 def describe(text: str) -> None:
     """One line under a label saying what the panel is. No panel ships unexplained."""
     st.markdown(f'<div class="desc">{html.escape(text)}</div>', unsafe_allow_html=True)
@@ -69,22 +75,42 @@ def hero(chain: list[str]) -> None:
     st.markdown(
         '<div class="hero">'
         f"{wordmark('hero-mark', full_form=True)}"
-        '<p class="tagline">Eight agents research your question&nbsp;— '
-        "and show every decision they made.</p>"
-        f'<div class="eyebrow"><span class="pip"></span>{html.escape(live)} · $0 / month</div>'
+        '<p class="tagline">Agents research your question&nbsp;— then show their work: '
+        "every source read, every routing decision made.</p>"
+        f'<div class="eyebrow"><span class="pip"></span>{html.escape(live)} '
+        "<span class='bar'></span>free tiers only · $0 a month</div>"
         "</div>",
         unsafe_allow_html=True,
     )
 
 
+# the supervisor's two gates, and the three evaluation layers. both are structural facts with
+# no constant to read them from, so they are named here rather than buried in an f-string
+SUPERVISOR_GATES = 2
+EVAL_LAYERS = 3
+
+
 def stat_strip() -> None:
-    """Four numbers that frame the system before a run exists to describe it."""
-    cells = (("8", "autonomous agents"), ("4", "depth budgets"), ("3", "evaluation layers"))
+    """Four numbers that frame the system, each read from the thing it actually describes.
+
+    Not rendered by the landing page any more — four headline numbers about a system the reader
+    has not asked anything of yet read as a brochure. Kept because the figures are correct and
+    drift-proof, and a future surface may want them.
+    """
+    from amaris.agents.triage import DEPTH_BUDGETS
+
+    cells = (
+        (str(len(AGENT_ROWS)), "agents"),
+        (str(SUPERVISOR_GATES), "routing gates"),
+        (str(DEPTH_BUDGETS["deep"].max_sources), "sources at deep"),
+        (str(EVAL_LAYERS), "evaluation layers"),
+    )
     st.markdown(
         '<div class="stats">'
         + "".join(
-            f'<div class="stat"><div class="n">{n}</div><div class="l">{text}</div></div>'
-            for n, text in cells
+            f'<div class="stat"><div class="n">{n}</div>'
+            f'<div class="l">{html.escape(name)}</div></div>'
+            for n, name in cells
         )
         + "</div>",
         unsafe_allow_html=True,
@@ -532,12 +558,74 @@ def source_list(citations: list[dict[str, Any]], sources: list[dict[str, Any]]) 
         st.markdown("".join(rows), unsafe_allow_html=True)
 
 
+# 16px stroke glyphs rather than emoji: emoji pick up the platform's own colour and style,
+# which is the one thing a curated palette cannot control
+ICONS = {
+    "chain": "M6 10a4 4 0 0 1 0-6h2M10 6a4 4 0 0 1 0 6H8M6 8h4",
+    "layers": "M8 2 2 5.5 8 9l6-3.5L8 2M2 10.5 8 14l6-3.5",
+    "chat": "M14 9.5a2 2 0 0 1-2 2H6l-3 2.5v-2.5H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2z",
+    "gauge": "M2.5 12a6 6 0 1 1 11 0M8 12l3-4",
+}
+
+
+def icon(name: str) -> str:
+    """One inline stroke glyph, inheriting colour from its row. Empty for an unknown name."""
+    path = ICONS.get(name)
+    if not path:
+        return ""
+    return (
+        '<svg class="ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" '
+        f'stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="{path}"/></svg>'
+    )
+
+
+def system_summary(capabilities: dict[str, bool]) -> tuple[str, bool]:
+    """The one-line status for a collapsed panel, and whether it should open itself."""
+    from amaris.llm.router import configured_chain, provider_status
+
+    chain = configured_chain()
+    ready = sum(1 for name in chain if not provider_status().get(name))
+    live = sum(1 for on in capabilities.values() if on)
+    if ready == len(chain) and live == len(capabilities):
+        return "System · all live", False
+    # the counts only earn their width when one of them is short, and then the panel opens itself
+    return f"System · {ready}/{len(chain)} providers · {live}/{len(capabilities)} live", True
+
+
+def provider_alert() -> None:
+    """A parked chain, said out loud. Kept outside the panel so collapsing cannot hide it."""
+    from amaris.llm.router import configured_chain, provider_status
+
+    chain = configured_chain()
+    cooling = provider_status()
+    ready = [name for name in chain if not cooling.get(name)]
+    # a run started against a fully parked chain crawls through retries and then fails;
+    # saying so up front is cheaper than watching it for nineteen minutes
+    if chain and not ready:
+        st.error("every provider is rate limited — a run started now will crawl and likely fail.")
+    elif chain and len(ready) < len(chain):
+        st.warning(f"only {', '.join(ready)} usable — expect slower runs.")
+
+
+def agent_list() -> None:
+    """The agents as sidebar rows. What each one DECIDES is the line that shows autonomy."""
+    rows = "".join(
+        f'<div class="ag-row{" core" if name == "supervisor" else ""}">'
+        f'<div class="ag-hd"><span class="tag">{tag}</span>'
+        f'<span class="nm">{html.escape(name)}</span>'
+        f'<span class="role">{html.escape(role)}</span></div>'
+        f'<div class="dec">{html.escape(decides)}</div></div>'
+        for tag, name, role, decides in AGENT_ROWS
+    )
+    st.markdown(f'<div class="ag-list">{rows}</div>', unsafe_allow_html=True)
+
+
 def system_panel(capabilities: dict[str, bool]) -> None:
     """Providers and optional capabilities as one card — both answer "what is live right now".
 
-    They were two labelled sections with their own rule, hint and full-size chips, which spent
-    roughly 230px of a 236px column to say eight short words. Capabilities are here because
-    ADR-009 degrades silently by design: correct behaviour, and invisible without this.
+    They were two labelled sections with their own rule, hint and chips, which spent roughly
+    230px of column to say eight short words. Capabilities are here because ADR-009 degrades
+    silently by design: correct behaviour, and invisible without this.
     """
     from amaris.llm.router import configured_chain, provider_status
 
@@ -561,25 +649,21 @@ def system_panel(capabilities: dict[str, bool]) -> None:
         f'<span class="dot"></span>{html.escape(name)}</span>'
         for name, on in capabilities.items()
     )
+    all_ready = chain and len(ready) == len(chain)
+    all_live = capabilities and live == len(capabilities)
 
     st.markdown(
-        '<div class="sysbox">'
-        '<div class="sys-hd"><span>llm chain</span>'
-        f'<span class="c">{len(ready)}/{len(chain)} ready</span></div>'
+        '<div class="card sysbox">'
+        f'<div class="sys-hd">{icon("chain")}<span class="t">LLM chain</span>'
+        f'<span class="pill {"ok" if all_ready else "warn"}">{len(ready)}/{len(chain)}</span></div>'
         f'<div class="sys-grid chain">{providers}</div>'
-        '<div class="sys-hd"><span>capabilities</span>'
-        f'<span class="c">{live}/{len(capabilities)} live</span></div>'
+        '<div class="sys-sep"></div>'
+        f'<div class="sys-hd">{icon("layers")}<span class="t">Capabilities</span>'
+        f'<span class="pill {"ok" if all_live else "warn"}">{live}/{len(capabilities)}</span></div>'
         f'<div class="sys-grid">{caps}</div>'
         "</div>",
         unsafe_allow_html=True,
     )
-
-    # a run started against a fully parked chain crawls through retries and then fails;
-    # saying so up front is cheaper than watching it for nineteen minutes
-    if chain and not ready:
-        st.error("every provider is rate limited — a run started now will crawl and likely fail.")
-    elif chain and len(ready) < len(chain):
-        st.warning(f"only {', '.join(ready)} usable — expect slower runs.")
 
 
 def mini_metrics(cells: dict[str, str]) -> None:
@@ -589,7 +673,7 @@ def mini_metrics(cells: dict[str, str]) -> None:
     st.markdown(
         '<div class="metrics mini">'
         + "".join(
-            f'<div class="metric"><div class="k">{html.escape(k)}</div>'
+            f'<div class="metric card"><div class="k">{html.escape(k)}</div>'
             f'<div class="v">{html.escape(v)}</div></div>'
             for k, v in cells.items()
         )
@@ -607,8 +691,8 @@ def depth_table() -> None:
     from amaris.agents.triage import DEPTH_BUDGETS
 
     header = (
-        '<div class="r h"><span>depth</span><span>tasks</span>'
-        "<span>src</span><span>words</span></div>"
+        '<div class="r h"><span>Depth</span><span>Tasks</span>'
+        "<span>Src</span><span>Words</span></div>"
     )
     rows = "".join(
         f'<div class="r"><span class="d">{html.escape(depth)}</span>'
@@ -616,7 +700,7 @@ def depth_table() -> None:
         f"<span>{budget.word_target}</span></div>"
         for depth, budget in DEPTH_BUDGETS.items()
     )
-    st.markdown(f'<div class="dtbl">{header}{rows}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="card dtbl">{header}{rows}</div>', unsafe_allow_html=True)
 
 
 def kv_rows(rows: dict[str, str], boxed: bool = False) -> None:

@@ -19,6 +19,7 @@ from amaris.api.schemas import (
     build_progress_event,
     result_from_state,
 )
+from amaris.config.settings import use_session_keys
 from amaris.graph.pipeline import stream_research
 from amaris.memory.redis_memory import get_job_store
 from amaris.observability.context import new_session_id
@@ -53,9 +54,17 @@ async def _publish(store: JobStore, job_id: str, event: ProgressEvent) -> None:
 
 
 async def _run_job(
-    job_id: str, query: str, session_id: str, seed: dict[str, Any] | None = None
+    job_id: str,
+    query: str,
+    session_id: str,
+    seed: dict[str, Any] | None = None,
+    api_keys: dict[str, str] | None = None,
 ) -> None:
     """Drive the pipeline and mirror every node transition into the job store."""
+    # bound inside the task, not in the request handler: a task gets its own copy of the
+    # context, so one caller's key cannot reach another caller's job (ADR-037)
+    if api_keys:
+        use_session_keys(api_keys)
     store = await get_job_store()
     pct = 0
     started = time.perf_counter()
@@ -100,9 +109,15 @@ async def _run_job(
         logger.bind(job_id=job_id, error=str(exc)[:200]).exception("api.job_failed")
 
 
-def _spawn(job_id: str, query: str, session_id: str, seed: dict[str, Any] | None = None) -> None:
+def _spawn(
+    job_id: str,
+    query: str,
+    session_id: str,
+    seed: dict[str, Any] | None = None,
+    api_keys: dict[str, str] | None = None,
+) -> None:
     """Fire the run off the request thread and keep it referenced until it ends."""
-    task = asyncio.create_task(_run_job(job_id, query, session_id, seed))
+    task = asyncio.create_task(_run_job(job_id, query, session_id, seed, api_keys))
     _running.add(task)
     task.add_done_callback(_running.discard)
 
@@ -120,7 +135,7 @@ async def start_research(request: ResearchRequest) -> ResearchAccepted:
     store = await get_job_store()
     await store.create_job(job_id, guard.text)
     await store.update_job(job_id, session_id=session_id)
-    _spawn(job_id, guard.text, session_id, request.seed())
+    _spawn(job_id, guard.text, session_id, request.seed(), request.api_keys)
 
     logger.bind(job_id=job_id, session_id=session_id, query=guard.text[:120]).info("api.job_queued")
     return ResearchAccepted(job_id=job_id, session_id=session_id)

@@ -72,6 +72,9 @@ class ResearchRequest(BaseModel):
     # files already ingested into Qdrant for this session: [{name, url, chunks}]. The text is
     # not carried here — the researcher retrieves what it needs by session_id.
     attachments: list[dict[str, Any]] = Field(default_factory=list, max_length=MAX_ATTACHMENTS)
+    # the caller's own provider keys, bound for this job only (ADR-037). deliberately kept out
+    # of seed(): a key has no business in GraphState, which is checkpointed and replayed
+    api_keys: dict[str, str] = Field(default_factory=dict, exclude=True)
 
     def seed(self) -> dict[str, Any]:
         """What new_state() should carry forward. Empty dict for an ordinary first question."""

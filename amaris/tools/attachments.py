@@ -23,7 +23,9 @@ VISION_PROVIDER = "gemini"
 
 PDF_TYPES = ("application/pdf",)
 IMAGE_TYPES = ("image/png", "image/jpeg", "image/jpg", "image/webp")
-SUPPORTED_TYPES = PDF_TYPES + IMAGE_TYPES
+# PDF only for an upload. IMAGE_TYPES is still live below: a scanned PDF is rasterised into
+# pages and read through exactly that path, so removing it would take scanned PDFs with it
+SUPPORTED_TYPES = PDF_TYPES
 
 # what the vision model is asked for — a description would be useless as a citable source
 VISION_PROMPT = (
@@ -205,31 +207,28 @@ async def ingest(name: str, data: bytes, mime: str, session_id: str) -> dict[str
     """
     settings = get_settings()
     if mime not in SUPPORTED_TYPES:
-        raise AttachmentError(f"{mime or 'this file type'} is not supported — PDF or image only")
+        raise AttachmentError(f"{mime or 'this file type'} is not supported — PDF only")
     if len(data) > settings.attachment_max_bytes:
         limit_mb = settings.attachment_max_bytes / 1_000_000
         raise AttachmentError(f"{name} is larger than the {limit_mb:.0f}MB limit")
 
     scanned = False
-    if mime in PDF_TYPES:
-        text = extract_pdf(data, settings.attachment_max_pages)
+    text = extract_pdf(data, settings.attachment_max_pages)
+    if not text:
+        # no text layer means a scan, so the pages are rendered and read as images
+        # rather than handing the problem back to the user
+        scanned = True
+        pages = rasterize_pdf(
+            data, settings.attachment_max_scan_pages, settings.attachment_scan_scale
+        )
+        if not pages:
+            raise AttachmentError(f"{name} has no pages to read")
+        read = await asyncio.gather(
+            *(extract_image(page) for page in pages), return_exceptions=True
+        )
+        text = _clean("\n\n".join(part for part in read if isinstance(part, str) and part))
         if not text:
-            # no text layer means a scan, so the pages are rendered and read as images
-            # rather than handing the problem back to the user
-            scanned = True
-            pages = rasterize_pdf(
-                data, settings.attachment_max_scan_pages, settings.attachment_scan_scale
-            )
-            if not pages:
-                raise AttachmentError(f"{name} has no pages to read")
-            read = await asyncio.gather(
-                *(extract_image(page) for page in pages), return_exceptions=True
-            )
-            text = _clean("\n\n".join(part for part in read if isinstance(part, str) and part))
-            if not text:
-                raise AttachmentError(f"{name} is a scan and no text could be read from it")
-    else:
-        text = await extract_image(data, mime)
+            raise AttachmentError(f"{name} is a scan and no text could be read from it")
 
     text = text[: settings.attachment_max_chars]
     chunks = chunk_text(text, settings.attachment_chunk_chars, settings.attachment_chunk_overlap)

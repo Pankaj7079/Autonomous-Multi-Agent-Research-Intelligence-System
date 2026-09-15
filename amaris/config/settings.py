@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextvars import ContextVar
 from functools import lru_cache
 from typing import Literal
 
@@ -134,7 +135,14 @@ class Settings(BaseSettings):
         return self.deployment_mode == "cloud"
 
     def key(self, name: str) -> str | None:
-        """Plain value of a SecretStr field, or None when it isn't really configured."""
+        """Plain value of a SecretStr field, or None when it isn't really configured.
+
+        A key bound to this context by `use_session_keys` wins, so a cloud visitor can run on
+        their own quota without their key reaching anyone else's run.
+        """
+        supplied = (_SESSION_KEYS.get() or {}).get(name)
+        if supplied:
+            return supplied
         secret: SecretStr | None = getattr(self, name, None)
         if not secret:
             return None
@@ -154,6 +162,26 @@ class Settings(BaseSettings):
             ("anthropic", "anthropic_api_key"),
         ]
         return [provider for provider, field in pairs if self.key(field)]
+
+
+# a visitor's own key on a shared cloud process. a contextvar and not os.environ or the settings
+# singleton: streamlit runs each session's script in its own thread, so a value set here is
+# visible to that run's coroutines and to nobody else's. the process-global alternatives are a
+# cross-visitor key leak on any deployment serving more than one person at a time.
+_SESSION_KEYS: ContextVar[dict[str, str] | None] = ContextVar("amaris_session_keys", default=None)
+
+
+def use_session_keys(keys: dict[str, str]) -> None:
+    """Bind caller-supplied API keys to this context. Pass {} to go back to the configured ones."""
+    bound = {name: value.strip() for name, value in keys.items() if value and value.strip()}
+    # deliberately silent: observability.logging imports this module, so a logger here is a
+    # circular import — and a key value is the one thing that must never reach a log line anyway
+    _SESSION_KEYS.set(bound)
+
+
+def session_keys() -> dict[str, str]:
+    """What is currently bound to this context. Values included — callers must not log them."""
+    return dict(_SESSION_KEYS.get() or {})
 
 
 @lru_cache(maxsize=1)

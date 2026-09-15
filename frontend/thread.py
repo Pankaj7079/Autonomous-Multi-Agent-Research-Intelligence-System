@@ -120,10 +120,10 @@ def session_totals() -> dict[str, str]:
         if source.get("url")
     }
     return {
-        "avg score": f"{sum(t.quality_score for t in traces) / len(traces):.2f}",
-        "sources": str(len(urls)),
-        "elapsed": f"{seconds / 60:.1f}m" if seconds >= 60 else f"{seconds:.0f}s",
-        "routing": str(sum(len(t.decisions) for t in traces)),
+        "Avg score": f"{sum(t.quality_score for t in traces) / len(traces):.2f}",
+        "Sources": str(len(urls)),
+        "Elapsed": f"{seconds / 60:.1f}m" if seconds >= 60 else f"{seconds:.0f}s",
+        "Routing": str(sum(len(t.decisions) for t in traces)),
     }
 
 
@@ -406,7 +406,7 @@ def thread_sidebar() -> None:
     thread = turns()
     if not thread:
         # a markdown div, not st.caption: streamlit lays a caption 11px inside the label above
-        st.markdown('<div class="sb-empty">no questions yet</div>', unsafe_allow_html=True)
+        st.markdown('<div class="sb-empty">No questions yet</div>', unsafe_allow_html=True)
         return
 
     focused = st.session_state.get(SELECTED, len(thread) - 1)

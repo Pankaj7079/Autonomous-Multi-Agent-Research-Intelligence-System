@@ -443,12 +443,15 @@ def test_the_sidebar_flags_a_parked_provider(fake: FakeStreamlit, monkeypatch) -
     fake.error = lambda body: warnings.append(f"ERROR {body}")
 
     components.system_panel({})
+    components.provider_alert()
 
     assert "3600s" in fake.drawn
     assert any("only glm usable" in w for w in warnings)
 
 
-def test_the_sidebar_refuses_a_fully_parked_chain(fake: FakeStreamlit, monkeypatch) -> None:
+def test_a_parked_chain_is_reported_outside_the_panel_so_collapsing_cannot_hide_it(
+    fake: FakeStreamlit, monkeypatch
+) -> None:
     from amaris.llm import router
 
     monkeypatch.setattr(router, "provider_status", lambda: {"groq": 120.0, "glm": 30.0})
@@ -457,7 +460,7 @@ def test_the_sidebar_refuses_a_fully_parked_chain(fake: FakeStreamlit, monkeypat
     fake.error = errors.append
     fake.warning = lambda body: None
 
-    components.system_panel({})
+    components.provider_alert()
     assert any("every provider is rate limited" in e for e in errors)
 
 
@@ -506,7 +509,7 @@ def test_a_live_capability_is_visually_distinct_from_a_missing_one(
     assert 'class="sys-item off"' in fake.drawn
     assert "memory" in fake.drawn and "docx" in fake.drawn
     # the counts are what make the card glanceable — a 1/2 says something is off without reading
-    assert "1/2 live" in fake.drawn
+    assert '<span class="pill warn">1/2</span>' in fake.drawn
 
 
 def test_the_system_card_is_one_element_so_nothing_can_be_laid_over_it(
@@ -522,7 +525,50 @@ def test_the_system_card_is_one_element_so_nothing_can_be_laid_over_it(
     components.system_panel({"memory": True})
 
     assert len(fake.html) == 1
-    assert "2/2 ready" in fake.drawn
+    assert '<span class="pill ok">2/2</span>' in fake.drawn
+
+
+def test_a_healthy_system_summarises_itself_without_making_the_reader_do_arithmetic(
+    fake: FakeStreamlit, monkeypatch
+) -> None:
+    """The panel is collapsed by default, so its summary row is the only thing most sessions
+    ever read. Counts earn their width only when one of them is short."""
+    from amaris.llm import router
+
+    monkeypatch.setattr(router, "provider_status", lambda: {})
+    monkeypatch.setattr(router, "configured_chain", lambda: ["groq", "gemini"])
+
+    text, opens = components.system_summary({"memory": True, "docx": True})
+    assert text == "System · all live"
+    assert opens is False
+
+
+def test_a_degraded_system_names_the_shortfall_and_opens_its_own_panel(
+    fake: FakeStreamlit, monkeypatch
+) -> None:
+    from amaris.llm import router
+
+    monkeypatch.setattr(router, "provider_status", lambda: {"groq": 60.0})
+    monkeypatch.setattr(router, "configured_chain", lambda: ["groq", "gemini"])
+
+    text, opens = components.system_summary({"memory": False, "docx": True})
+    assert "1/2 providers" in text and "1/2 live" in text
+    # a problem the reader has to click to discover is a problem the reader will not discover
+    assert opens is True
+
+
+def test_the_agent_list_marks_the_supervisor_because_deciding_is_its_whole_job(
+    fake: FakeStreamlit,
+) -> None:
+    """The decision column is the point — a list of duties would read as a fixed pipeline."""
+    components.agent_list()
+    drawn = fake.drawn
+
+    assert 'class="ag-row core"' in drawn
+    for _tag, name, _role, _decides in components.AGENT_ROWS:
+        assert name in drawn
+    # the researcher's line is the clearest statement that the graph does not drive it
+    assert "the graph never stops it" in drawn
 
 
 def test_mini_metrics_draws_nothing_when_there_is_nothing_to_report(

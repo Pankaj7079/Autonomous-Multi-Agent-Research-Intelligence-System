@@ -14,7 +14,7 @@ import httpx
 import streamlit as st
 from websockets.asyncio.client import connect
 
-from amaris.agents.triage import budget_for
+from amaris.agents.triage import DEPTH_BUDGETS, budget_for
 from amaris.api.schemas import (
     DONE_PROGRESS,
     ProgressEvent,
@@ -23,22 +23,25 @@ from amaris.api.schemas import (
     build_progress_event,
     result_from_state,
 )
-from amaris.config.settings import get_settings
+from amaris.config.settings import get_settings, use_session_keys
 from amaris.config.validate import ConfigReport, log_report, validate_config
 from amaris.export.mailer import DOCX_MIME
 from amaris.observability.logging import configure_from_settings, logger
 from amaris.safety.guardrails import validate_input
 from frontend import thread
 from frontend.components import (
+    AGENT_ROWS,
+    agent_list,
     asking,
     depth_table,
     hero,
-    label,
     mini_metrics,
+    provider_alert,
     system_panel,
+    system_summary,
 )
 from frontend.styles import collapsed_css, inject_css, wordmark
-from frontend.views import inspection, landing, live_run
+from frontend.views import inspection, live_run
 
 TERMINAL = ("done", "failed")
 HTTP_TIMEOUT_SECONDS = 30.0
@@ -49,8 +52,9 @@ MIN_QUERY_CHARS = 3
 # short enough that starting docker mid-session shows up without a restart
 CAPABILITY_TTL_SECONDS = 60
 
-# what the composer's paperclip accepts; images are read by the vision model, not by OCR
-ATTACHMENT_TYPES = ["pdf", "png", "jpg", "jpeg", "webp"]
+# PDF only. a scanned PDF still works — its pages are rasterised and read as images inside
+# the ingest path, which is why the image machinery stays even though uploads no longer take one
+ATTACHMENT_TYPES = ["pdf"]
 
 # "auto" is not a depth, it is the absence of one — triage sizes the question as it always has
 DEPTH_CHOICES = ("auto", "brief", "standard", "deep")
@@ -61,6 +65,14 @@ DEPTH_SAVED = "depth_choice_saved"
 # the sidebar collapses on our own flag: streamlit's control reopens from the app header,
 # which this UI removes, so its own collapse is a one-way door
 SIDEBAR_HIDDEN = "sidebar_hidden"
+# a visitor's own provider key, held in their session only and never written anywhere
+BYO_KEYS = "byo_keys"
+KEY_FIELDS = {
+    "groq": "groq_api_key",
+    "gemini": "gemini_api_key",
+    "glm": "glm_api_key",
+    "anthropic": "anthropic_api_key",
+}
 # solid triangles rather than chevrons: ruff rejects the chevron characters as
 # look-alikes for < and >, and these read as direction at any size
 HIDE_MARK = "◀"
@@ -69,11 +81,11 @@ SHOW_MARK = "▶"
 # the evaluator's ~45s dominate, so even the shallow depths are a minute rather than seconds
 DEPTH_ETA = {"brief": "~1-2 min", "standard": "~2-3 min", "deep": "~3-6 min"}
 
-# each one triages to a different depth, so clicking any of them shows the budget logic working
+# two, one per research level, and each locks the depth it advertises — three examples that
+# all triaged to whatever triage felt like demonstrated nothing about the depth system
 EXAMPLES = (
-    "what is the MCP protocol?",
-    "how does LangGraph differ from CrewAI?",
-    "why evaluate agent trajectories, not just answers?",
+    ("what is prompt caching and when does it pay off?", "brief"),
+    ("how do LangGraph, CrewAI and AutoGen compare for production agents?", "deep"),
 )
 
 EventSink = Callable[[ProgressEvent], None]
@@ -100,6 +112,11 @@ def _payload(action: dict[str, Any]) -> dict[str, Any]:
         body["depth"] = action["depth"]
     if action.get("prior_sources"):
         body["prior_sources"] = action["prior_sources"]
+    # local mode runs the pipeline in the API process, so a key typed here has to travel with
+    # the request or it never reaches the agents. cloud mode binds it in-process and sends none.
+    keys = st.session_state.get(BYO_KEYS, {})
+    if keys:
+        body["api_keys"] = keys
     return body
 
 
@@ -215,7 +232,7 @@ def _toggle_sidebar() -> None:
 
 
 def _sidebar(mode: str) -> None:
-    """Deliberately lean — status and the thread. Full configuration lives in the System tab."""
+    """Every panel collapsed by default — the header row carries enough to skip opening it."""
     head, control = st.columns([1, 0.4], vertical_alignment="center")
     with head:
         st.markdown(wordmark("sb-mark"), unsafe_allow_html=True)
@@ -224,39 +241,92 @@ def _sidebar(mode: str) -> None:
         # above the wordmark and read as a stray control belonging to nothing
         st.button(HIDE_MARK, key="sb_hide", help="collapse the sidebar", on_click=_toggle_sidebar)
     st.markdown(
-        f'<div class="sb-sub">research console'
+        f'<div class="sb-sub">Research console'
         f'<span class="sb-mode">{html.escape(mode)}</span></div>',
         unsafe_allow_html=True,
     )
 
-    label("system", hint="fallback order · grey = off")
-    system_panel(_capabilities())
+    from amaris.llm.router import configured_chain
 
-    files = thread.attachments()
-    if files:
-        label("attached", f"{len(files)}", hint="retrieved per task, cited like a source")
-        for item in files:
-            st.markdown(
-                f'<span class="chip accent"><span class="dot"></span>'
-                f"{html.escape(str(item['name']))} · {item['chunks']} chunks</span>",
-                unsafe_allow_html=True,
-            )
+    st.markdown(
+        '<div class="sb-tagline">Status, agents, budgets and this session.</div>',
+        unsafe_allow_html=True,
+    )
 
+    # first, because it is the only panel a visitor may have to act on before anything works
+    mine = st.session_state.get(BYO_KEYS, {})
+    with st.expander(
+        "Your API key" + (" · in use" if mine else ""),
+        expanded=bool(mine) or not configured_chain(),
+    ):
+        _key_panel()
+
+    capabilities = _capabilities()
+    # outside the panel on purpose: a warning a collapsed section can hide is not a warning
+    provider_alert()
+    summary, degraded = system_summary(capabilities)
+    with st.expander(summary, expanded=degraded):
+        system_panel(capabilities)
+
+    with st.expander(f"Agents · {len(AGENT_ROWS)}"):
+        agent_list()
+
+    with st.expander(f"Depth budgets · {len(DEPTH_BUDGETS)}"):
+        depth_table()
+
+    # last, under every panel that describes the system: this one is about the session, and it
+    # is the only section that grows, so anything below it would drift down the column
     turns = thread.turns()
-    # "conversation", not "this conversation": the longer label wrapped to two lines in a
-    # 236px column and pushed the count pill onto a line of its own
-    label("conversation", str(len(turns)) if turns else "")
-    mini_metrics(thread.session_totals())
-    thread.thread_sidebar()
+    heading = f"Conversation · {len(turns)}" if turns else "Conversation"
+    with st.expander(heading, expanded=bool(turns)):
+        mini_metrics(thread.session_totals())
+        thread.thread_sidebar()
+        if turns:
+            _session_actions()
 
-    if turns:
-        _session_actions()
-        return
 
-    # nothing to show about a conversation that has not started, so the space goes to the
-    # one thing the picker below the composer never explains: what the other depths cost
-    label("depth budgets", hint="chosen by the composer")
-    depth_table()
+def _key_panel() -> None:
+    """Run on your own quota. The key stays in this session — never logged, stored or shared.
+
+    It is bound with use_session_keys rather than written into the settings singleton or the
+    environment: one Streamlit process serves every visitor, and both of those would hand one
+    visitor's key to the next visitor's run. In local mode the run happens in the API process,
+    so the key travels with the request and is bound there for that job alone (ADR-037).
+    """
+    mine = st.session_state.get(BYO_KEYS, {})
+    provider = st.selectbox(
+        "provider", tuple(KEY_FIELDS), key="byo_provider", label_visibility="collapsed"
+    )
+    entered = st.text_input(
+        "key",
+        type="password",
+        key="byo_key",
+        placeholder=f"{provider} api key",
+        label_visibility="collapsed",
+    )
+    left, right = st.columns(2)
+    with left:
+        if st.button("Use key", use_container_width=True, disabled=not entered):
+            st.session_state[BYO_KEYS] = {**mine, KEY_FIELDS[str(provider)]: entered}
+            st.rerun()
+    with right:
+        if st.button("Forget", use_container_width=True, disabled=not mine):
+            st.session_state.pop(BYO_KEYS, None)
+            st.rerun()
+
+    if mine:
+        names = ", ".join(name for name, field in KEY_FIELDS.items() if field in mine)
+        st.markdown(
+            f'<div class="key-on">running on your {html.escape(names)} key · '
+            "this browser session only</div>",
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(
+            '<div class="key-off">Optional. Without one, runs use the key this deployment '
+            "was configured with.</div>",
+            unsafe_allow_html=True,
+        )
 
 
 def _session_actions() -> None:
@@ -267,7 +337,7 @@ def _session_actions() -> None:
             from amaris.export import build_markdown_docx, docx_filename
 
             st.download_button(
-                "save .docx",
+                "Save .docx",
                 # a callable so the transcript is built on click, not on every rerun
                 data=lambda: build_markdown_docx(
                     thread.transcript_markdown(), "AMARIS research conversation"
@@ -279,7 +349,7 @@ def _session_actions() -> None:
                 use_container_width=True,
             )
     with right:
-        if st.button("start over", use_container_width=True, help="drop the whole conversation"):
+        if st.button("Start over", use_container_width=True, help="drop the whole conversation"):
             thread.clear()
             st.rerun()
 
@@ -340,17 +410,28 @@ def _transcribe(audio: Any) -> str | None:
 
 
 def _examples() -> None:
-    """One click into a real run — an empty page with only a text box offers nothing to try."""
-    label("try one", "runs a full pipeline")
-    for column, question in zip(st.columns(len(EXAMPLES)), EXAMPLES, strict=True):
+    """One click into a real run — an empty page with only a text box offers nothing to try.
+
+    Each locks the level it runs at, so the pair shows what depth buys rather than asserting it.
+    """
+    st.markdown(
+        '<div class="try-hd">Try one</div>'
+        '<div class="try-sub">One brief run and one deep one — each locks its own level.</div>',
+        unsafe_allow_html=True,
+    )
+    for column, (question, depth) in zip(st.columns(len(EXAMPLES)), EXAMPLES, strict=True):
         with column:
             if st.button(question, use_container_width=True, key=f"eg{hash(question)}"):
-                st.session_state[thread.PENDING] = thread.ask_request(question)
+                st.session_state[thread.PENDING] = thread.ask_request(question, depth)
                 st.rerun()
 
 
 def _depth_picker() -> str:
     """The depth the next question runs at, or "" to let triage size it."""
+    # a heading, not a bare row of chips: the picker sat unlabelled under the examples, and its
+    # margin is also what clears the budget line above it — streamlit measures a markdown
+    # element at one line's height, so anything taller overflows into whatever comes next
+    st.markdown('<div class="lvl-hd">Research level</div>', unsafe_allow_html=True)
     picked = st.segmented_control(
         "depth",
         DEPTH_CHOICES,
@@ -363,14 +444,20 @@ def _depth_picker() -> str:
     st.session_state[DEPTH_SAVED] = choice
 
     if choice == "auto":
-        st.caption("auto · triage sizes the question before anything is spent on it")
+        note = "triage sizes the question itself, before anything is spent on it"
     else:
         budget = budget_for(choice)
-        st.caption(
-            f"{choice} · {budget.tasks} tasks · {budget.react_iterations} react loops · "
+        note = (
+            f"{budget.tasks} tasks · {budget.react_iterations} react loops · "
             f"up to {budget.max_sources} sources · ~{budget.word_target} words · "
             f"{DEPTH_ETA.get(choice, '')} · triage spends no model call"
         )
+    # markdown, not st.caption: this sheet renders captions as 0.68rem grey mono, which is the
+    # console look and the least readable line on the page
+    st.markdown(
+        f'<div class="depth-note"><span class="lvl">{html.escape(choice)}</span>{note}</div>',
+        unsafe_allow_html=True,
+    )
     return "" if choice == "auto" else str(choice)
 
 
@@ -401,9 +488,13 @@ def main() -> None:
         layout="wide",
         initial_sidebar_state="expanded",
     )
-    report = _boot()
+    _boot()
     settings = get_settings()
     inject_css()
+    use_session_keys(st.session_state.get(BYO_KEYS, {}))
+    # re-validated per run, not read from the cached boot report: a key entered in the browser
+    # must clear the "no provider configured" error that report was written before
+    report = validate_config()
 
     from amaris.llm.router import configured_chain
 
@@ -422,7 +513,6 @@ def main() -> None:
     turns = thread.turns()
     if not turns:
         hero(chain)
-        landing()
         _examples()
 
     for index, turn in enumerate(turns):

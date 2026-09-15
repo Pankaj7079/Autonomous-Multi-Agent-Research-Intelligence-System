@@ -9,7 +9,6 @@ import streamlit as st
 
 from amaris.config.settings import get_settings
 from frontend.components import (
-    agent_grid,
     agent_timeline,
     analysis_view,
     critic_verdict,
@@ -38,15 +37,9 @@ if TYPE_CHECKING:
 
 
 def landing() -> None:
-    """What sits under the hero before a question is asked — the numbers and the agents.
-
-    The routing transcript, depth table and GraphState list that used to follow were removed:
-    they explained the system in prose instead of showing it, which the inspection tabs do.
-    """
+    """The framing numbers. Not called by app.py any more — the landing page is the wordmark,
+    the examples and the composer, and four numbers above them read as a brochure."""
     stat_strip()
-    label("the agents")
-    describe("Each one owns a decision, not a step.")
-    agent_grid()
 
 
 def live_run(events: list[ProgressEvent]) -> None:
