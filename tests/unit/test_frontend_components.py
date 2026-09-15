@@ -488,3 +488,63 @@ def test_the_question_is_escaped_before_it_is_drawn(fake: FakeStreamlit) -> None
 
     assert "<img" not in drawn
     assert "&lt;img" in drawn
+
+
+def test_a_live_capability_is_visually_distinct_from_a_missing_one(fake: FakeStreamlit) -> None:
+    """ADR-009 degrades silently on purpose, so the only signal a user gets is this strip."""
+    components.capability_strip({"memory": True, "docx": False})
+
+    assert 'class="chip cap on"' in fake.drawn
+    assert 'class="chip cap off"' in fake.drawn
+    assert "memory" in fake.drawn and "docx" in fake.drawn
+
+
+def test_capability_names_opt_out_of_the_full_width_chip_rule(fake: FakeStreamlit) -> None:
+    """Four full-width rows cost more sidebar height than the information is worth."""
+    components.capability_strip({"memory": True})
+    assert "chip cap" in fake.drawn
+
+
+def test_mini_metrics_draws_nothing_when_there_is_nothing_to_report(
+    fake: FakeStreamlit,
+) -> None:
+    """An empty strip of zeroes reads as a broken session rather than a new one."""
+    components.mini_metrics({})
+    assert fake.drawn == ""
+
+
+def test_mini_metrics_keeps_the_metric_markup_so_it_inherits_the_strip_styling(
+    fake: FakeStreamlit,
+) -> None:
+    components.mini_metrics({"avg score": "0.88", "sources": "31"})
+
+    assert 'class="metrics mini"' in fake.drawn
+    assert "avg score" in fake.drawn and "0.88" in fake.drawn
+
+
+def test_a_label_hint_ships_inside_the_same_element_as_the_heading(fake: FakeStreamlit) -> None:
+    """As its own st.caption, Streamlit laid the hint 11px inside the heading's rule."""
+    components.label("providers", hint="fallback order")
+
+    assert len(fake.html) == 1
+    assert 'class="lbl"' in fake.drawn and 'class="lbl-hint"' in fake.drawn
+
+
+def test_a_label_without_a_hint_emits_no_empty_hint_div(fake: FakeStreamlit) -> None:
+    components.label("providers")
+    assert "lbl-hint" not in fake.drawn
+
+
+def test_the_depth_table_is_read_from_the_budgets_so_it_cannot_drift(
+    fake: FakeStreamlit,
+) -> None:
+    """A hand-written table here would quietly disagree with what a run actually spends."""
+    from amaris.agents.triage import budget_for
+
+    components.depth_table()
+
+    deep = budget_for("deep")
+    assert f"<span>{deep.max_sources}</span>" in fake.drawn
+    assert f"<span>{deep.word_target}</span>" in fake.drawn
+    for depth in ("direct", "brief", "standard", "deep"):
+        assert depth in fake.drawn

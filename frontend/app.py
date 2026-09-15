@@ -7,6 +7,7 @@ import html
 import json
 import time
 from collections.abc import Callable
+from importlib.util import find_spec
 from typing import Any
 
 import httpx
@@ -24,10 +25,19 @@ from amaris.api.schemas import (
 )
 from amaris.config.settings import get_settings
 from amaris.config.validate import ConfigReport, log_report, validate_config
+from amaris.export.mailer import DOCX_MIME
 from amaris.observability.logging import configure_from_settings, logger
 from amaris.safety.guardrails import validate_input
 from frontend import thread
-from frontend.components import asking, hero, label, provider_strip
+from frontend.components import (
+    asking,
+    capability_strip,
+    depth_table,
+    hero,
+    label,
+    mini_metrics,
+    provider_strip,
+)
 from frontend.styles import inject_css, wordmark
 from frontend.views import inspection, landing, live_run
 
@@ -35,6 +45,10 @@ TERMINAL = ("done", "failed")
 HTTP_TIMEOUT_SECONDS = 30.0
 # mirrors ResearchRequest.query's min_length so both deployment modes reject the same input
 MIN_QUERY_CHARS = 3
+
+# the memory check pings qdrant, so it is cached — long enough to stay off the hot path,
+# short enough that starting docker mid-session shows up without a restart
+CAPABILITY_TTL_SECONDS = 60
 
 # what the composer's paperclip accepts; images are read by the vision model, not by OCR
 ATTACHMENT_TYPES = ["pdf", "png", "jpg", "jpeg", "webp"]
@@ -173,35 +187,81 @@ def _execute(action: dict[str, Any], is_cloud: bool) -> None:
     ).info("frontend.run_finished")
 
 
+@st.cache_data(ttl=CAPABILITY_TTL_SECONDS, show_spinner=False)
+def _capabilities() -> dict[str, bool]:
+    """What is reachable right now. Cached — the memory check is a network call to Qdrant."""
+    from amaris.export import email_enabled
+    from amaris.tools.vector_tool import ping
+
+    # find_spec, not an import: loading fastembed pulls a ~100MB onnx model into this process
+    embedder = find_spec("fastembed") is not None
+    reachable = embedder and asyncio.run(ping())
+    return {
+        "memory": bool(reachable),
+        "uploads": bool(embedder and find_spec("pypdf")),
+        "docx": find_spec("docx") is not None,
+        "email": email_enabled(),
+    }
+
+
 def _sidebar(mode: str) -> None:
-    """Deliberately lean — status and the thread only. Configuration lives in the System tab."""
+    """Deliberately lean — status and the thread. Full configuration lives in the System tab."""
     st.markdown(
         f'{wordmark("sb-mark")}<div class="sb-sub">research console · {html.escape(mode)}</div>',
         unsafe_allow_html=True,
     )
-    label("providers")
+    label("providers", hint="fallback order · n = cooldown")
     provider_strip()
-    st.caption("first is primary · a number is its cooldown")
+
+    label("capabilities", hint="grey = off or unreachable")
+    capability_strip(_capabilities())
 
     files = thread.attachments()
     if files:
-        label("attached", f"{len(files)}")
+        label("attached", f"{len(files)}", hint="retrieved per task, cited like a source")
         for item in files:
             st.markdown(
                 f'<span class="chip accent"><span class="dot"></span>'
                 f"{html.escape(str(item['name']))} · {item['chunks']} chunks</span>",
                 unsafe_allow_html=True,
             )
-        st.caption("retrieved per task, cited like any other source")
 
-    label("this conversation")
+    turns = thread.turns()
+    # "conversation", not "this conversation": the longer label wrapped to two lines in a
+    # 236px column and pushed the count pill onto a line of its own
+    label("conversation", str(len(turns)) if turns else "")
+    mini_metrics(thread.session_totals())
     thread.thread_sidebar()
 
-    if thread.turns():
-        label("session")
-        if st.button("start over", use_container_width=True):
-            thread.clear()
-            st.rerun()
+    if turns:
+        _session_actions()
+        return
+
+    # nothing to show about a conversation that has not started, so the space goes to the
+    # one thing the picker below the composer never explains: what the other depths cost
+    label("depth budgets", hint="pick one by the composer, or let triage choose")
+    depth_table()
+
+
+def _session_actions() -> None:
+    """Take the whole conversation away, or drop it. Per-turn export lives on the turn card."""
+    if find_spec("docx") is not None:
+        from amaris.export import build_markdown_docx, docx_filename
+
+        st.download_button(
+            "download conversation",
+            # a callable so the transcript is built on click, not on every rerun
+            data=lambda: build_markdown_docx(
+                thread.transcript_markdown(), "AMARIS research conversation"
+            ),
+            file_name=docx_filename("conversation"),
+            mime=DOCX_MIME,
+            key="dl_thread",
+            use_container_width=True,
+        )
+    if st.button("start over", use_container_width=True):
+        thread.clear()
+        st.rerun()
 
 
 def _ingest_files(files: list[Any]) -> bool:

@@ -140,12 +140,71 @@ section[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {{ gap: 0.3rem;
   text-align: center; line-height: 1.6; max-width: min(90vw, 420px);
 }}
 
-/* three chips wrap ragged in a 236px column — one per row reads as a status list instead.
+/* chips wrap two to a line rather than one full-width row each: three stacked white boxes
+   were the heaviest thing in the column and cost 90px to say three short words. a wrapped
+   row still reads left-to-right, so the provider fallback order survives.
    styled on the chip itself, not a wrapper div: a block wrapper here measured 11px short of
    its own content and streamlit printed the next element on top of it */
 section[data-testid="stSidebar"] .chip {{
-  display: flex; width: 100%; margin: 0 0 0.3rem;
+  display: inline-flex; width: auto; margin: 0 0.25rem 0.3rem 0;
 }}
+
+/* the strip is built for the main pane's width; in a 236px column it needs two fixed
+   columns and smaller numbers, or auto-fit collapses it to one very tall stack */
+section[data-testid="stSidebar"] .metrics.mini {{
+  grid-template-columns: 1fr 1fr; margin: 0.35rem 0 0.7rem;
+}}
+section[data-testid="stSidebar"] .metrics.mini .metric {{ padding: 0.45rem 0.55rem; }}
+section[data-testid="stSidebar"] .metrics.mini .k {{ font-size: 0.5rem; letter-spacing: 0.08em; }}
+section[data-testid="stSidebar"] .metrics.mini .v {{ font-size: 0.95rem; margin-top: 0.1rem; }}
+
+/* streamlit ships stCaptionContainer with a -16px bottom margin and the p inside carries its
+   own; left alone they collapsed a caption 9px into the label above it, printing "no questions
+   yet" through the CONVERSATION rule. both are pinned here rather than offset with another
+   negative number, which is what caused the collision in the first place */
+section[data-testid="stSidebar"] [data-testid="stCaptionContainer"] {{
+  margin: 0 0 0.5rem !important;
+}}
+section[data-testid="stSidebar"] [data-testid="stCaptionContainer"] p {{
+  margin: 0 !important; line-height: 1.45;
+}}
+
+/* 2rem between sections is right in the main pane and wasteful in a 236px column.
+   margin, never padding: streamlit's markdown wrapper measures 27.5px whatever is inside it,
+   so padding overflows the wrapper and the next element draws over the label. a margin
+   collapses out of the wrapper instead and pushes the whole block down, which is what works. */
+section[data-testid="stSidebar"] .lbl {{ margin: 1.35rem 0 0.35rem; }}
+
+/* the explanation under a section heading rides inside the same markdown element as the
+   heading. as its own st.caption it was a second wrapper, and streamlit laid it 11px inside
+   the label's rule — one element cannot collide with itself. */
+.lbl-hint {{
+  font-family: var(--mono); font-size: 0.58rem; color: var(--ghost);
+  letter-spacing: 0.03em; line-height: 1.5; margin: -0.15rem 0 0.45rem;
+}}
+.sb-empty {{
+  font-family: var(--mono); font-size: 0.65rem; color: var(--ghost);
+  margin: 0.1rem 0 0.3rem;
+}}
+
+/* the four budgets as a reference table — shown only when no conversation has started,
+   so it fills space that is otherwise dead rather than competing with the thread */
+.dtbl {{
+  font-family: var(--mono); font-size: 0.62rem; color: var(--dim);
+  border: 1px solid var(--line); border-radius: var(--r-sm);
+  background: var(--surface); overflow: hidden; margin: 0.15rem 0 0.5rem;
+}}
+.dtbl .r {{
+  display: grid; grid-template-columns: 1fr 1.6rem 1.9rem 2.6rem;
+  gap: 0.2rem; padding: 0.3rem 0.5rem; align-items: baseline;
+}}
+.dtbl .r + .r {{ border-top: 1px solid var(--line); }}
+.dtbl .h {{
+  color: var(--ghost); font-size: 0.52rem; letter-spacing: 0.1em; text-transform: uppercase;
+  background: var(--surface-2);
+}}
+.dtbl .r span:not(:first-child) {{ text-align: right; font-variant-numeric: tabular-nums; }}
+.dtbl .d {{ color: var(--text); font-weight: 500; }}
 
 .sb-mark {{ font-size: 1.32rem; }}
 .sb-sub {{

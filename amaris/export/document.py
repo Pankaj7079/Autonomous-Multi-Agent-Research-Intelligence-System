@@ -143,30 +143,24 @@ def _meta_line(result: ResearchResult | None, session_id: str, elapsed: float) -
     return "  ·  ".join(parts)
 
 
-def build_docx(
-    result: ResearchResult | None,
-    query: str,
-    *,
-    session_id: str = "",
-    elapsed: float = 0.0,
-) -> bytes:
-    """The report as .docx bytes. Raises ExportUnavailable without the export extra."""
+def build_markdown_docx(markdown_text: str, title: str, subtitle: str = "") -> bytes:
+    """Any markdown as .docx bytes. Raises ExportUnavailable without the export extra."""
     try:
         from docx import Document
         from docx.shared import Pt
     except ImportError as exc:
         raise ExportUnavailable("install the export extra: uv sync --extra export") from exc
 
-    report = result.report if result is not None else ""
     document = Document()
-    document.add_heading(query.strip() or "AMARIS report", level=0)
+    document.add_heading(title or "AMARIS report", level=0)
 
-    meta = document.add_paragraph()
-    run = meta.add_run(_meta_line(result, session_id, elapsed))
-    run.italic = True
-    run.font.size = Pt(META_POINTS)
+    if subtitle:
+        meta = document.add_paragraph()
+        run = meta.add_run(subtitle)
+        run.italic = True
+        run.font.size = Pt(META_POINTS)
 
-    for block in to_blocks(report):
+    for block in to_blocks(markdown_text):
         if block.kind == "heading":
             document.add_heading(block.text, level=min(block.level, MAX_HEADING_LEVEL))
         elif block.kind == "bullet":
@@ -187,8 +181,23 @@ def build_docx(
     buffer = BytesIO()
     document.save(buffer)
     data = buffer.getvalue()
-    logger.bind(bytes=len(data), chars=len(report)).info("export.docx_built")
+    logger.bind(bytes=len(data), chars=len(markdown_text)).info("export.docx_built")
     return data
+
+
+def build_docx(
+    result: ResearchResult | None,
+    query: str,
+    *,
+    session_id: str = "",
+    elapsed: float = 0.0,
+) -> bytes:
+    """One finished turn as .docx bytes, titled by its question."""
+    return build_markdown_docx(
+        result.report if result is not None else "",
+        query.strip(),
+        _meta_line(result, session_id, elapsed),
+    )
 
 
 def docx_filename(query: str) -> str:

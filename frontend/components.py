@@ -47,10 +47,15 @@ AGENT_ROWS: tuple[tuple[str, str, str, str], ...] = (
 )
 
 
-def label(text: str, note: str = "") -> None:
-    """Section heading. The count or qualifier goes in `note` and renders as a pill."""
+def label(text: str, note: str = "", hint: str = "") -> None:
+    """Section heading. `note` renders as a count pill, `hint` as a line under it.
+
+    The hint is emitted inside this same markdown element on purpose — as a separate
+    st.caption, Streamlit laid it 11px inside the heading's rule.
+    """
     extra = f'<span class="n">{html.escape(note)}</span>' if note else ""
-    st.markdown(f'<div class="lbl">{html.escape(text)}{extra}</div>', unsafe_allow_html=True)
+    under = f'<div class="lbl-hint">{html.escape(hint)}</div>' if hint else ""
+    st.markdown(f'<div class="lbl">{html.escape(text)}{extra}</div>{under}', unsafe_allow_html=True)
 
 
 def describe(text: str) -> None:
@@ -550,6 +555,60 @@ def provider_strip() -> None:
         st.error("every provider is rate limited — a run started now will crawl and likely fail.")
     elif chain and len(ready) < len(chain):
         st.warning(f"only {', '.join(ready)} usable — expect slower runs.")
+
+
+def capability_strip(capabilities: dict[str, bool]) -> None:
+    """Which optional capabilities are actually live right now.
+
+    The system degrades silently by design (ADR-009), which is correct behaviour and a
+    terrible user experience on its own: without this the only way to learn that long-term
+    memory is off is to notice that nothing is ever recalled.
+    """
+    st.markdown(
+        "".join(
+            f'<span class="chip cap {"on" if live else "off"}"><span class="dot"></span>'
+            f"{html.escape(name)}</span> "
+            for name, live in capabilities.items()
+        ),
+        unsafe_allow_html=True,
+    )
+
+
+def mini_metrics(cells: dict[str, str]) -> None:
+    """The metric strip at sidebar scale — same markup, two columns, smaller type."""
+    if not cells:
+        return
+    st.markdown(
+        '<div class="metrics mini">'
+        + "".join(
+            f'<div class="metric"><div class="k">{html.escape(k)}</div>'
+            f'<div class="v">{html.escape(v)}</div></div>'
+            for k, v in cells.items()
+        )
+        + "</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def depth_table() -> None:
+    """The four budgets side by side, read straight from DEPTH_BUDGETS so it cannot drift.
+
+    The landing page advertises "4 depth budgets" and nothing ever said what they are; the
+    picker only describes the one that is selected.
+    """
+    from amaris.agents.triage import DEPTH_BUDGETS
+
+    header = (
+        '<div class="r h"><span>depth</span><span>task</span>'
+        "<span>src</span><span>words</span></div>"
+    )
+    rows = "".join(
+        f'<div class="r"><span class="d">{html.escape(depth)}</span>'
+        f"<span>{budget.tasks}</span><span>{budget.max_sources}</span>"
+        f"<span>{budget.word_target}</span></div>"
+        for depth, budget in DEPTH_BUDGETS.items()
+    )
+    st.markdown(f'<div class="dtbl">{header}{rows}</div>', unsafe_allow_html=True)
 
 
 def kv_rows(rows: dict[str, str], boxed: bool = False) -> None:

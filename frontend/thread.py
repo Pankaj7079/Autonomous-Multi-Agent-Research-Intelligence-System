@@ -103,6 +103,41 @@ def history_payload() -> list[dict[str, str]]:
     ]
 
 
+def session_totals() -> dict[str, str]:
+    """What this conversation has cost so far. {} until a run has actually scored."""
+    scored = [turn for turn in turns() if turn.get("result") and turn["result"].trace]
+    if not scored:
+        return {}
+
+    traces = [turn["result"].trace for turn in scored]
+    seconds = sum(float(turn.get("elapsed") or 0.0) for turn in turns())
+    # deduped across turns: a follow-up re-reads the same pages, so summing per-run counts
+    # would claim the conversation saw twice the evidence it did
+    urls = {
+        str(source.get("url", ""))
+        for trace in traces
+        for source in trace.sources
+        if source.get("url")
+    }
+    return {
+        "avg score": f"{sum(t.quality_score for t in traces) / len(traces):.2f}",
+        "sources": str(len(urls)),
+        "elapsed": f"{seconds / 60:.1f}m" if seconds >= 60 else f"{seconds:.0f}s",
+        "routing": str(sum(len(t.decisions) for t in traces)),
+    }
+
+
+def transcript_markdown() -> str:
+    """The whole conversation as one markdown document, oldest turn first."""
+    parts: list[str] = []
+    for index, turn in enumerate(turns(), start=1):
+        answer = answer_of(turn) or "_no report was produced_"
+        depth = depth_of(turn)
+        # the question is a heading so it survives as one in the exported document
+        parts.append(f"# {index}. {turn['query']}\n\n_{depth or 'unknown'} research_\n\n{answer}")
+    return "\n\n---\n\n".join(parts)
+
+
 def can_expand(turn: dict[str, Any]) -> bool:
     """False at the deepest depth, on a failed run, and on a question that was asked back."""
     result = turn.get("result")
@@ -370,7 +405,8 @@ def thread_sidebar() -> None:
     """Every turn in this conversation, one click to rebind the inspection tabs to it."""
     thread = turns()
     if not thread:
-        st.caption("no questions yet")
+        # a markdown div, not st.caption: streamlit lays a caption 11px inside the label above
+        st.markdown('<div class="sb-empty">no questions yet</div>', unsafe_allow_html=True)
         return
 
     focused = st.session_state.get(SELECTED, len(thread) - 1)

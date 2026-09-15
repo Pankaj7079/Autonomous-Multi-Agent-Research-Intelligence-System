@@ -6,7 +6,12 @@ deployment modes, but nothing here knows that, so an API route could call it unc
 
 from __future__ import annotations
 
-from amaris.export.document import ExportUnavailable, build_docx, docx_filename
+from amaris.export.document import (
+    ExportUnavailable,
+    build_docx,
+    build_markdown_docx,
+    docx_filename,
+)
 from amaris.export.mailer import (
     DOCX_MIME,
     MailRefused,
@@ -22,6 +27,7 @@ __all__ = [
     "MailRefused",
     "MailUnavailable",
     "build_docx",
+    "build_markdown_docx",
     "docx_filename",
     "email_enabled",
     "refusal_reason",
