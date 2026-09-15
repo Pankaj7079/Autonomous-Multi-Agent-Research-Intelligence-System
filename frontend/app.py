@@ -268,10 +268,10 @@ def _sidebar(mode: str) -> None:
     with st.expander(summary, expanded=degraded):
         system_panel(capabilities)
 
-    with st.expander(f"Agents · {len(AGENT_ROWS)}"):
+    with st.expander(f"Agents"):
         agent_list()
 
-    with st.expander(f"Depth budgets · {len(DEPTH_BUDGETS)}"):
+    with st.expander(f"Depth budgets"):
         depth_table()
 
     # last, under every panel that describes the system: this one is about the session, and it
