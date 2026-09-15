@@ -431,7 +431,7 @@ class ResearcherAgent(BaseAgent):
             logger.bind(error=str(exc)[:150]).warning("researcher.assess_failed")
 
         # counting sources said 69 junk pages were good research, so fall back to how well
-        # the ones we kept actually match the question
+
         return lexical
 
     async def _remember(self, query: str, sources: list[dict[str, Any]]) -> None:

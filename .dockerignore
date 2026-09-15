@@ -1,0 +1,17 @@
+.venv/
+logs/
+evals/
+docs/
+.claude/
+.git/
+.github/
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+*.pyc
+.env
+.streamlit/secrets.toml
+checkpoints.db
+checkpoints.db-*
+qdrant_storage/
+.cache/

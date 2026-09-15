@@ -41,8 +41,7 @@ def _retry_delay(attempt: int, rate_limited: bool = False) -> float:
         return max(blocked, MIN_RETRY_SLEEP_SECONDS)
     if rate_limited and attempt >= 1:
         # the first rate-limit retry stays prompt, because a free provider usually means the
-        # failure was one provider's problem. a second one means the chain only looked free —
-        # a cooldown had just expired — so stop hammering and spend the budget it exists for.
+
         return RATE_LIMIT_RETRY_SECONDS
     # a free provider means the failure was transient, so retry soon and don't read its hint
     return BACKOFF_BASE_SECONDS * 2**attempt
@@ -92,8 +91,7 @@ class BaseAgent(ABC):
         rate_limited = False
         attempts = 0
         # both, because each alone has a hole: counting only sleep missed three 90s timeouts
-        # that burned 274s, and counting only wall clock lets a parked chain spin, since
-        # ProvidersCoolingDown never spends an attempt and mocked sleep advances no time
+
         waited = 0.0
         started = time.monotonic()
         budget = self.settings.llm_retry_budget_seconds
