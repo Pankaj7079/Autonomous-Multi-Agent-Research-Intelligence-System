@@ -231,7 +231,7 @@ requires-dist = [
     { name = "langchain-groq", specifier = ">=0.2.0" },
     { name = "langchain-openai", specifier = ">=1.6.2" },
     { name = "langchain-qdrant", marker = "extra == 'memory'", specifier = ">=0.2.0" },
-    { name = "langfuse", marker = "extra == 'observability'", specifier = ">=2.0.0" },
+    { name = "langfuse", marker = "extra == 'observability'", specifier = ">=4.0.0" },
     { name = "langgraph", specifier = ">=0.3.0" },
     { name = "langgraph-checkpoint-sqlite", specifier = ">=2.0.0" },
     { name = "langsmith", marker = "extra == 'observability'", specifier = ">=0.2.0" },

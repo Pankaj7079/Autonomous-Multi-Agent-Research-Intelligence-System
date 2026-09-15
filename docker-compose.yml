@@ -23,6 +23,8 @@ services:
     restart: unless-stopped
 
   # optional — unlimited free traces, self-hosted
+  # v2, while the python sdk is v4 — self-hosting a matching v3+ server also needs
+  # clickhouse, redis and minio, so langfuse cloud is the supported path (ADR-043)
   langfuse:
     image: langfuse/langfuse:2
     container_name: amaris-langfuse

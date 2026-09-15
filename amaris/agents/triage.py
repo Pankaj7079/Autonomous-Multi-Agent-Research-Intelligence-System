@@ -115,8 +115,17 @@ Output JSON:
   "word_target": 150,
   "reason": "one sentence on what the question needs"
 }}
-{history}
+{history}{attached}
 Question: {query}"""
+
+ATTACHED_BLOCK = """
+The user has attached these files, and their text is already indexed and retrievable:
+{files}
+
+So a question about "this document", "the file", "this pdf" or "it" is fully answerable —
+the attachment is the subject. Never ask which document they mean. Resolve the question to
+name the file instead, and size it by what the question asks of the file, not by its length.
+"""
 
 HISTORY_BLOCK = """
 Earlier in this conversation:
@@ -129,6 +138,15 @@ back at what was just answered, so resolve it rather than asking who or what is 
 # enough to resolve a pronoun, not enough to grow the prompt without bound
 HISTORY_TURNS = 3
 HISTORY_ANSWER_CHARS = 600
+
+
+def format_attachments(attachments: list[dict[str, Any]]) -> str:
+    """The attached filenames as a prompt block, or "" when nothing is attached."""
+    names = [str(item.get("name") or item.get("url", "")) for item in (attachments or [])]
+    names = [name for name in names if name]
+    if not names:
+        return ""
+    return ATTACHED_BLOCK.format(files="\n".join(f"  - {name}" for name in names))
 
 
 def format_history(history: list[dict[str, str]]) -> str:
@@ -181,6 +199,7 @@ class TriageAgent(BaseAgent):
                 PROMPT.format(
                     query=state["original_query"],
                     history=format_history(state.get("history", [])),
+                    attached=format_attachments(state.get("attachments", [])),
                 ),
                 TriageOutput,
             )
@@ -190,7 +209,7 @@ class TriageAgent(BaseAgent):
             logger.bind(error=str(exc)[:150]).warning("triage.failed")
             payload = TriageOutput()
 
-        return self._settle(payload)
+        return self._settle(payload, state.get("attachments", []))
 
     def _live(self, place: str) -> dict[str, Any]:
         """A question about live state is handed to a data source, so no research is planned."""
@@ -221,7 +240,9 @@ class TriageAgent(BaseAgent):
             "triage_reason": f"{depth} requested by the user",
         }
 
-    def _settle(self, payload: TriageOutput) -> dict[str, Any]:
+    def _settle(
+        self, payload: TriageOutput, attachments: list[dict[str, Any]] | None = None
+    ) -> dict[str, Any]:
         """Clamp the model's answer to something every downstream budget can be derived from."""
         depth = payload.depth.strip().lower()
         if depth not in DEPTHS:
@@ -229,6 +250,12 @@ class TriageAgent(BaseAgent):
         budget = budget_for(depth)
 
         answerable = payload.answerable or not payload.clarifying_question.strip()
+        # the only thing triage asks back for is a missing subject, and an attached file is the
+        # subject — asking "which document?" about the one file just uploaded is never right
+        if attachments and not answerable:
+            logger.bind(files=len(attachments)).info("triage.attachment_answers_it")
+            answerable = True
+            payload.clarifying_question = ""
         sections = [s.strip() for s in payload.sections if s.strip()] or list(budget.sections)
         # the answer always leads, whatever headings the model asked for
         if sections[0].lower() != "answer":

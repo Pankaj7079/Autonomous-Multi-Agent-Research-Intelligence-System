@@ -7,7 +7,7 @@ import json
 import pytest
 
 from amaris.agents.triage import DEPTH_BUDGETS, TriageAgent, budget_for
-from amaris.graph.state import DEFAULT_DEPTH, DEPTHS
+from amaris.graph.state import DEFAULT_DEPTH, DEPTHS, new_state
 from tests.helpers import ScriptedLLM, patch_invoke
 
 
@@ -235,3 +235,30 @@ async def test_a_standalone_question_needs_no_rewrite(
 ) -> None:
     update = await triage(monkeypatch, state, verdict())
     assert update["resolved_query"] == ""
+
+
+async def test_an_attached_file_is_the_subject_a_vague_question_refers_to(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Found live: "summarize this document" was answered with "which document?" while the pdf
+    the user had just uploaded sat in state. Triage was never told the attachment existed."""
+    state = new_state("summarize this document")
+    state["attachments"] = [{"name": "AI_Intern_JD.pdf", "url": "file://AI_Intern_JD.pdf"}]
+
+    # the model still hedges on a bare "this document"; the attachment is what settles it
+    reply = verdict(answerable=False, clarifying_question="Which document?")
+    update = await triage(monkeypatch, state, reply)
+
+    assert update["answerable"] is True
+    assert update["clarifying_question"] == ""
+
+
+async def test_a_vague_question_with_no_attachment_is_still_asked_back(
+    monkeypatch: pytest.MonkeyPatch, state
+) -> None:
+    """The override must not swallow a genuine missing parameter."""
+    reply = verdict(answerable=False, clarifying_question="Which city?")
+    update = await triage(monkeypatch, state, reply)
+
+    assert update["answerable"] is False
+    assert update["clarifying_question"] == "Which city?"

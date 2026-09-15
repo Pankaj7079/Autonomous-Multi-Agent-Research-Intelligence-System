@@ -213,6 +213,11 @@ async def search_knowledge_base(
             for point in response.points
         ]
     except Exception as exc:
+        # a collection that does not exist yet holds nothing, which is an answer, not a failure —
+        # it is the normal state on a fresh qdrant and the 404 body reads like a real error
+        if "doesn't exist" in str(exc) or "Not found" in str(exc):
+            logger.bind(collection=collection).debug("vector.collection_missing")
+            return []
         logger.bind(tool="search_knowledge_base", error=str(exc)[:200]).warning("tool.failed")
         return []
     finally:
@@ -224,3 +229,82 @@ async def search_knowledge_base(
         results=len(hits),
     ).debug("tool.call")
     return hits
+
+
+async def delete_documents(
+    session_id: str = "", urls: list[str] | None = None, collection: str = COLLECTION
+) -> int:
+    """Delete points for one attachment session, or for specific urls. Returns points removed.
+
+    An upload is the user's own file; leaving it in a shared collection after the conversation
+    ends is storage nobody asked for and evidence nobody can retrieve (ADR-045).
+    """
+    if not session_id and not urls:
+        return 0
+
+    client = _client()
+    if client is None:
+        return 0
+
+    try:
+        from qdrant_client.models import FieldCondition, Filter, MatchAny, MatchValue
+
+        must = []
+        if session_id:
+            must.append(FieldCondition(key="session_id", match=MatchValue(value=session_id)))
+        if urls:
+            must.append(FieldCondition(key="url", match=MatchAny(any=list(urls))))
+        selector = Filter(must=must)
+
+        # counted before deleting: qdrant does not report how many points a filter removed
+        before = await client.count(collection_name=collection, count_filter=selector, exact=True)
+        if not before.count:
+            return 0
+        await client.delete(collection_name=collection, points_selector=selector)
+    except Exception as exc:
+        logger.bind(tool="vector", error=str(exc)[:200]).warning("tool.failed")
+        return 0
+    else:
+        logger.bind(
+            tool="vector", removed=before.count, session_id=session_id, urls=len(urls or [])
+        ).info("vector.deleted")
+        return int(before.count)
+    finally:
+        await client.close()
+
+
+async def purge_stale_attachments(max_age_hours: float, collection: str = COLLECTION) -> int:
+    """Delete attachment chunks older than max_age_hours. Returns how many went.
+
+    "Start over" cleans up the conversations that end properly. This is for the ones that do
+    not: a closed browser tab never presses a button (ADR-045).
+    """
+    if max_age_hours <= 0:
+        return 0
+
+    client = _client()
+    if client is None:
+        return 0
+
+    try:
+        from qdrant_client.models import FieldCondition, Filter, MatchValue, Range
+
+        cutoff = time.time() - max_age_hours * 3600
+        selector = Filter(
+            must=[
+                FieldCondition(key="kind", match=MatchValue(value="attachment")),
+                FieldCondition(key="created_ts", range=Range(lt=cutoff)),
+            ]
+        )
+        before = await client.count(collection_name=collection, count_filter=selector, exact=True)
+        if not before.count:
+            return 0
+        await client.delete(collection_name=collection, points_selector=selector)
+    except Exception as exc:
+        logger.bind(tool="vector", error=str(exc)[:200]).warning("tool.failed")
+        return 0
+    else:
+        logger.bind(removed=before.count, older_than_h=max_age_hours).info("vector.purged")
+        return int(before.count)
+    finally:
+        await client.close()

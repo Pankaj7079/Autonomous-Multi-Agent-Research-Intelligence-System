@@ -95,6 +95,7 @@ RunOutcome = tuple[ResearchResult | None, str, str | None]
 def _boot() -> ConfigReport:
     """Streamlit reruns the script constantly, so this must happen exactly once."""
     configure_from_settings()
+    _sweep_old_attachments()
     report = validate_config()
     log_report(report)
     return report
@@ -476,6 +477,21 @@ def _dispatch(action: dict[str, Any], settings: Any) -> None:
         st.error(f"the run failed: {exc}")
         return
     st.rerun()
+
+
+@st.cache_resource
+def _sweep_old_attachments() -> int:
+    """Drop uploads left behind by conversations that were closed rather than ended (ADR-045).
+
+    cache_resource, so this runs once per server process and not on every rerun.
+    """
+    from amaris.tools.vector_tool import purge_stale_attachments
+
+    try:
+        return asyncio.run(purge_stale_attachments(get_settings().attachment_retention_hours))
+    except Exception as exc:
+        logger.bind(error=str(exc)[:150]).warning("frontend.attachment_sweep_failed")
+        return 0
 
 
 def main() -> None:

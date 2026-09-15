@@ -2,8 +2,8 @@
 .env
 .claude/settings.local.json
 .streamlit/secrets.toml
-amaris_checkpoints.db
-amaris_checkpoints.db-*
+checkpoints.db
+checkpoints.db-*
 
 # system logs — replayable per session, never committed
 logs/

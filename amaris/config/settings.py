@@ -44,6 +44,9 @@ class Settings(BaseSettings):
     github_token: SecretStr | None = None
     # off by default: a research run would otherwise spawn npx/uvx subprocesses, which is a
     # surprise in tests and a cold start in cloud mode where no node runtime exists
+    # uploaded chunks older than this are swept at startup; 0 disables the sweep. "start over"
+    # already deletes them, but a closed browser tab never presses a button
+    attachment_retention_hours: float = Field(default=24.0, ge=0.0)
     mcp_client_enabled: bool = False
     # empty disables the filesystem MCP server: pointing an agent at a whole disk is not a default
     mcp_filesystem_root: str = ""
@@ -53,6 +56,7 @@ class Settings(BaseSettings):
     log_json_enabled: bool = True
 
     langsmith_api_key: SecretStr | None = None
+    langsmith_project: str = "amaris"
     langfuse_public_key: SecretStr | None = None
     langfuse_secret_key: SecretStr | None = None
     langfuse_host: str = "http://localhost:3000"
@@ -66,7 +70,7 @@ class Settings(BaseSettings):
     qdrant_url: str | None = None
     qdrant_api_key: SecretStr | None = None
 
-    sqlite_checkpoint_db: str = "./amaris_checkpoints.db"
+    sqlite_checkpoint_db: str = "./checkpoints.db"
     # checkpoints resume a crashed run, so only recent threads are worth keeping — nothing
     # pruned them before and the file grew ~176KB per run forever
     checkpoint_keep_threads: int = Field(default=50, ge=1)

@@ -11,6 +11,7 @@ import asyncio
 import base64
 import io
 import re
+import time
 from functools import lru_cache
 from itertools import pairwise
 from typing import Any
@@ -239,8 +240,15 @@ async def ingest(name: str, data: bytes, mime: str, session_id: str) -> dict[str
 
     # url doubles as the citation target, so it has to identify the file, not a web page
     url = f"file://{name}"
+    # tagged and timestamped so an abandoned upload can be swept later: a browser tab that is
+    # simply closed never reaches "start over" (ADR-045)
+    now = time.time()
     stored = await upsert_documents(
-        [{"text": chunk, "url": url, "title": name} for chunk in chunks], session_id=session_id
+        [
+            {"text": chunk, "url": url, "title": name, "kind": "attachment", "created_ts": now}
+            for chunk in chunks
+        ],
+        session_id=session_id,
     )
     if not stored:
         raise AttachmentError(

@@ -7,6 +7,7 @@ st.session_state and dies with the browser session, which is the whole scope of 
 
 from __future__ import annotations
 
+import asyncio
 import html
 from functools import lru_cache
 from importlib.util import find_spec
@@ -17,6 +18,7 @@ import streamlit as st
 
 from amaris.agents.triage import HISTORY_TURNS, NEXT_DEPTH
 from amaris.config.settings import get_settings
+from amaris.observability.logging import logger
 from frontend.styles import badge_class
 
 if TYPE_CHECKING:
@@ -64,11 +66,31 @@ def append(
     st.session_state[SELECTED] = len(thread) - 1
 
 
+def forget_attachments() -> int:
+    """Delete this conversation's uploaded chunks from Qdrant. Returns how many went.
+
+    The file was the user's, and once the conversation is over it is storage nobody asked for
+    and evidence nothing can retrieve (ADR-045).
+    """
+    scope = st.session_state.get(ATTACHMENT_SESSION, "")
+    urls = [str(item.get("url", "")) for item in st.session_state.get(ATTACHMENTS, [])]
+    if not scope and not urls:
+        return 0
+
+    from amaris.tools.vector_tool import delete_documents
+
+    try:
+        return asyncio.run(delete_documents(session_id=scope, urls=[u for u in urls if u]))
+    except Exception as exc:
+        # a failed cleanup must not stop the user starting a new conversation
+        logger.bind(error=str(exc)[:150]).warning("thread.attachment_cleanup_failed")
+        return 0
+
+
 def clear() -> None:
+    forget_attachments()
     st.session_state.pop(TURNS, None)
     st.session_state.pop(SELECTED, None)
-    # a new conversation gets a new attachment scope; the old chunks stay in Qdrant but
-    # nothing can retrieve them again, which is what "start over" should mean
     st.session_state.pop(ATTACHMENTS, None)
     st.session_state.pop(ATTACHMENT_SESSION, None)
 

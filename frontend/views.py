@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 import streamlit as st
 
 from amaris.config.settings import get_settings
+from amaris.observability.tracing import active_backend
 from frontend.components import (
     agent_timeline,
     analysis_view,
@@ -138,6 +139,7 @@ def system_tab(report: ConfigReport | None = None) -> None:
                 "qdrant": settings.qdrant_url or f"{settings.qdrant_host}:{settings.qdrant_port}",
                 "checkpoints": settings.sqlite_checkpoint_db,
                 "logs": settings.log_dir,
+                "tracing": active_backend() or "off",
             },
             boxed=True,
         )
