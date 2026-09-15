@@ -532,46 +532,54 @@ def source_list(citations: list[dict[str, Any]], sources: list[dict[str, Any]]) 
         st.markdown("".join(rows), unsafe_allow_html=True)
 
 
-def provider_strip() -> None:
-    """Which providers are usable right now, and a loud warning when none are."""
+def system_panel(capabilities: dict[str, bool]) -> None:
+    """Providers and optional capabilities as one card — both answer "what is live right now".
+
+    They were two labelled sections with their own rule, hint and full-size chips, which spent
+    roughly 230px of a 236px column to say eight short words. Capabilities are here because
+    ADR-009 degrades silently by design: correct behaviour, and invisible without this.
+    """
     from amaris.llm.router import configured_chain, provider_status
 
     chain = configured_chain()
     cooling = provider_status()
-    chips = (
-        "".join(
-            f'<span class="chip {"hot" if cooling.get(name) else "on"}"><span class="dot"></span>'
-            f"{name}{f' {cooling[name]:.0f}s' if cooling.get(name) else ''}</span> "
+    ready = [name for name in chain if not cooling.get(name)]
+
+    if chain:
+        providers = "".join(
+            f'<span class="sys-item {"hot" if cooling.get(name) else "on"}">'
+            f'<span class="dot"></span>{html.escape(name)}'
+            f"{f' {cooling[name]:.0f}s' if cooling.get(name) else ''}</span>"
             for name in chain
         )
-        or '<span class="chip off">none configured</span>'
+    else:
+        providers = '<span class="sys-item off"><span class="dot"></span>none configured</span>'
+
+    live = sum(1 for on in capabilities.values() if on)
+    caps = "".join(
+        f'<span class="sys-item {"on" if on else "off"}">'
+        f'<span class="dot"></span>{html.escape(name)}</span>'
+        for name, on in capabilities.items()
     )
-    st.markdown(chips, unsafe_allow_html=True)
+
+    st.markdown(
+        '<div class="sysbox">'
+        '<div class="sys-hd"><span>llm chain</span>'
+        f'<span class="c">{len(ready)}/{len(chain)} ready</span></div>'
+        f'<div class="sys-grid chain">{providers}</div>'
+        '<div class="sys-hd"><span>capabilities</span>'
+        f'<span class="c">{live}/{len(capabilities)} live</span></div>'
+        f'<div class="sys-grid">{caps}</div>'
+        "</div>",
+        unsafe_allow_html=True,
+    )
 
     # a run started against a fully parked chain crawls through retries and then fails;
     # saying so up front is cheaper than watching it for nineteen minutes
-    ready = [name for name in chain if not cooling.get(name)]
     if chain and not ready:
         st.error("every provider is rate limited — a run started now will crawl and likely fail.")
     elif chain and len(ready) < len(chain):
         st.warning(f"only {', '.join(ready)} usable — expect slower runs.")
-
-
-def capability_strip(capabilities: dict[str, bool]) -> None:
-    """Which optional capabilities are actually live right now.
-
-    The system degrades silently by design (ADR-009), which is correct behaviour and a
-    terrible user experience on its own: without this the only way to learn that long-term
-    memory is off is to notice that nothing is ever recalled.
-    """
-    st.markdown(
-        "".join(
-            f'<span class="chip cap {"on" if live else "off"}"><span class="dot"></span>'
-            f"{html.escape(name)}</span> "
-            for name, live in capabilities.items()
-        ),
-        unsafe_allow_html=True,
-    )
 
 
 def mini_metrics(cells: dict[str, str]) -> None:
@@ -599,7 +607,7 @@ def depth_table() -> None:
     from amaris.agents.triage import DEPTH_BUDGETS
 
     header = (
-        '<div class="r h"><span>depth</span><span>task</span>'
+        '<div class="r h"><span>depth</span><span>tasks</span>'
         "<span>src</span><span>words</span></div>"
     )
     rows = "".join(

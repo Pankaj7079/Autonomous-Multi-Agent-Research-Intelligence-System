@@ -8,6 +8,8 @@ import streamlit as st
 
 # warm paper ground, ink text, one deep-teal accent. Light on purpose: the page is read for
 # minutes at a time. Status colours are reserved for status and never used for decoration.
+# every text tone clears 4.5:1 on all three grounds — ghost used to be 2.20:1 on the sidebar,
+# which is why the small print under each heading was not really readable at all.
 TOKENS = {
     "bg": "#faf9f7",
     "bg-2": "#f2efea",
@@ -18,8 +20,8 @@ TOKENS = {
     "line-2": "#d6cfc5",
     "text": "#1c1a17",
     "dim": "#5b5650",
-    "faint": "#8a837a",
-    "ghost": "#aaa298",
+    "faint": "#655e56",
+    "ghost": "#726b62",
     "accent": "#0f766e",
     "accent-2": "#9a5b2d",
     "accent-dim": "#7fc4bd",
@@ -75,6 +77,11 @@ _CSS = f"""
 [data-testid="stVerticalBlock"] {{ gap: 0.55rem; }}
 [data-testid="stHorizontalBlock"] {{ gap: 0.45rem; }}
 
+/* flow-root, so a markdown block contains its children's margins instead of letting them
+   collapse out of it. without this the wrapper measured ~27px whatever was inside, and every
+   heading with a hint under it was drawn over by the chips, table or caption that followed. */
+[data-testid="stMarkdown"] {{ display: flow-root; }}
+
 /* the base size is set on .stApp alone and everything inherits it. listing bare span/div/p
    here instead set the size ON each element, which beats inheritance — that is what rendered
    the hero mark as a 96px "AMA" with a 14px "RIS" stuck to it. never reset a bare tag. */
@@ -85,8 +92,8 @@ _CSS = f"""
 
 /* ═══ sidebar ══════════════════════════════════════════════════════════════ */
 /* the sidebar is part of the console, not a drawer: it carries provider health and the whole
-   thread. collapsing it hid the reopen arrow with the header, so there is no collapse at all —
-   these override streamlit's own collapsed state, whatever it sets */
+   thread. these pin its width and override streamlit's own collapsed state, whatever it sets —
+   our toggle below is what collapses it */
 section[data-testid="stSidebar"] {{
   background: var(--bg-2);
   border-right: 1px solid var(--line);
@@ -97,10 +104,71 @@ section[data-testid="stSidebar"] {{
   visibility: visible !important;
   margin-left: 0 !important;
 }}
+/* streamlit's own collapse control is still hidden: its reopen arrow lives inside the app
+   header this sheet removes, so using it would collapse the sidebar with no way back. the
+   pair of buttons below replaces it and is ours end to end. */
 [data-testid="stSidebarCollapseButton"], [data-testid="stSidebarCollapsedControl"],
 [data-testid="stSidebarNavCollapseButton"] {{ display: none !important; }}
-section[data-testid="stSidebar"] .block-container {{ padding: 1.4rem 0.85rem 2rem; }}
+
+/* hide rides in the header row beside the wordmark, show floats over the page once the
+   sidebar is gone — both are ordinary buttons keyed with st-key-, so neither depends on
+   streamlit internals. absolutely positioned it sat above the mark and read as an orphan. */
+.st-key-sb_hide {{
+  display: flex !important; justify-content: flex-end; width: auto !important;
+}}
+.st-key-sb_show {{
+  position: fixed !important; top: 0.9rem; left: 0.9rem; width: auto !important; z-index: 1000;
+}}
+.st-key-sb_hide button, .st-key-sb_show button {{
+  min-height: 0 !important; width: 26px; height: 26px;
+  padding: 0 !important; line-height: 1 !important;
+  display: flex !important; align-items: center; justify-content: center;
+  font-size: 0.62rem !important; color: var(--faint) !important;
+  background: var(--surface) !important; border: 1px solid var(--line-2) !important;
+  border-radius: 50% !important; box-shadow: var(--lift) !important;
+}}
+.st-key-sb_hide button:hover, .st-key-sb_show button:hover {{
+  color: var(--accent) !important; border-color: var(--accent-dim) !important;
+}}
+/* streamlit 1.63 has no .block-container in the sidebar, so the padding rule that used to
+   live here selected nothing — stSidebarUserContent is the real one, and it needs the top
+   and bottom only or the side padding stacks on the wrapper above it and clips the table */
+section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {{
+  padding-top: 1rem !important; padding-bottom: 2rem !important;
+}}
+/* the sidebar header is 60px of empty chrome holding a logo spacer and the collapse button
+   this sheet already hides — 60px of nothing above the wordmark */
+[data-testid="stSidebarHeader"] {{ display: none !important; }}
+/* the sidebar scrolls on its own, and the platform scrollbar took 20px out of a 235px
+   column — squeezing every chip and shifting the layout the moment content overflowed.
+   a stable gutter reserves the space once, so nothing moves when it appears. */
+section[data-testid="stSidebar"] [data-testid="stSidebarContent"] {{
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-2) transparent;
+  scrollbar-gutter: stable;
+}}
+section[data-testid="stSidebar"] [data-testid="stSidebarContent"]::-webkit-scrollbar {{ width: 6px; }}
+section[data-testid="stSidebar"] [data-testid="stSidebarContent"]::-webkit-scrollbar-thumb {{
+  background: var(--line-2); border-radius: 3px;
+}}
 section[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {{ gap: 0.3rem; }}
+/* the main pane's button padding wrapped "export .docx" onto two lines in a half-width
+   sidebar column. the toggle is excluded — it is a fixed 26px circle with its own type size */
+section[data-testid="stSidebar"]
+  [data-testid="stElementContainer"]:not(.st-key-sb_hide) .stButton > button,
+section[data-testid="stSidebar"] .stDownloadButton > button {{
+  font-size: 0.72rem !important; padding: 0.35rem 0.55rem !important;
+}}
+/* the turn list is a list: centred labels put every score in a different place down the
+   column. the ellipsis is CSS rather than a character budget — a 20-character question still
+   wrapped the button to two lines once the prefix was counted */
+[class*="st-key-thr_"] button [data-testid="stMarkdownContainer"] {{
+  width: 100%; text-align: left !important;
+}}
+[class*="st-key-thr_"] button p {{
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-family: var(--mono) !important; font-weight: 500 !important;
+}}
 
 /* ═══ wordmark ═════════════════════════════════════════════════════════════ */
 /* no flex gap: "AMA" and the RIS span are separate flex items, so any gap here splits the
@@ -128,7 +196,7 @@ section[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {{ gap: 0.3rem;
   max-width: 100%;
 }}
 .wm-full {{
-  font-family: var(--mono); font-size: 0.6rem; font-weight: 500; letter-spacing: 0.07em;
+  font-family: var(--mono); font-size: 0.64rem; font-weight: 500; letter-spacing: 0.07em;
   text-transform: uppercase; color: var(--ghost); max-width: 240px; line-height: 1.5;
 }}
 /* the group itself stays unbounded — it must size to the big mark, not to the caption.
@@ -155,7 +223,7 @@ section[data-testid="stSidebar"] .metrics.mini {{
   grid-template-columns: 1fr 1fr; margin: 0.35rem 0 0.7rem;
 }}
 section[data-testid="stSidebar"] .metrics.mini .metric {{ padding: 0.45rem 0.55rem; }}
-section[data-testid="stSidebar"] .metrics.mini .k {{ font-size: 0.5rem; letter-spacing: 0.08em; }}
+section[data-testid="stSidebar"] .metrics.mini .k {{ font-size: 0.62rem; letter-spacing: 0.06em; }}
 section[data-testid="stSidebar"] .metrics.mini .v {{ font-size: 0.95rem; margin-top: 0.1rem; }}
 
 /* streamlit ships stCaptionContainer with a -16px bottom margin and the p inside carries its
@@ -179,12 +247,12 @@ section[data-testid="stSidebar"] .lbl {{ margin: 1.35rem 0 0.35rem; }}
    heading. as its own st.caption it was a second wrapper, and streamlit laid it 11px inside
    the label's rule — one element cannot collide with itself. */
 .lbl-hint {{
-  font-family: var(--mono); font-size: 0.58rem; color: var(--ghost);
-  letter-spacing: 0.03em; line-height: 1.5; margin: -0.15rem 0 0.45rem;
+  font-family: var(--mono); font-size: 0.64rem; color: var(--faint);
+  letter-spacing: 0.02em; line-height: 1.5; margin: -0.1rem 0 0.5rem;
 }}
 .sb-empty {{
   font-family: var(--mono); font-size: 0.65rem; color: var(--ghost);
-  margin: 0.1rem 0 0.3rem;
+  margin: 0.45rem 0 0.3rem;
 }}
 
 /* the four budgets as a reference table — shown only when no conversation has started,
@@ -194,23 +262,64 @@ section[data-testid="stSidebar"] .lbl {{ margin: 1.35rem 0 0.35rem; }}
   border: 1px solid var(--line); border-radius: var(--r-sm);
   background: var(--surface); overflow: hidden; margin: 0.15rem 0 0.5rem;
 }}
+/* the number columns are sized to their own headings — at 1.6rem "TASKS" wrapped to two
+   lines the moment the header font was raised to a readable size */
 .dtbl .r {{
-  display: grid; grid-template-columns: 1fr 1.6rem 1.9rem 2.6rem;
-  gap: 0.2rem; padding: 0.3rem 0.5rem; align-items: baseline;
+  display: grid; grid-template-columns: 1fr 2.4rem 2rem 2.8rem;
+  gap: 0.15rem; padding: 0.3rem 0.45rem; align-items: baseline; white-space: nowrap;
 }}
 .dtbl .r + .r {{ border-top: 1px solid var(--line); }}
 .dtbl .h {{
-  color: var(--ghost); font-size: 0.52rem; letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--faint); font-size: 0.62rem; letter-spacing: 0.06em; text-transform: uppercase;
   background: var(--surface-2);
 }}
 .dtbl .r span:not(:first-child) {{ text-align: right; font-variant-numeric: tabular-nums; }}
 .dtbl .d {{ color: var(--text); font-weight: 500; }}
 
-.sb-mark {{ font-size: 1.32rem; }}
+.sb-mark {{ font-size: 1.3rem; }}
+/* the mode reads as a pill on the same line, and the rule under it closes the header off —
+   without one the wordmark was just the first item in a flat stack of six */
 .sb-sub {{
+  display: flex; align-items: center; gap: 0.45rem;
   font-family: var(--mono); font-size: 0.63rem; color: var(--ghost);
-  letter-spacing: 0.1em; text-transform: uppercase; margin: 0.4rem 0 1.3rem 0.05rem;
+  letter-spacing: 0.1em; text-transform: uppercase;
+  margin: 0.1rem 0 1rem; padding-bottom: 0.65rem; border-bottom: 1px solid var(--line);
 }}
+.sb-mode {{
+  font-size: 0.62rem; letter-spacing: 0.06em; color: var(--accent);
+  background: var(--accent-soft); border-radius: 3px; padding: 0.08rem 0.32rem;
+}}
+
+/* providers and capabilities share one card: as two labelled sections with their own rule,
+   hint and full-size chips they cost ~230px of a 236px column to say eight short words */
+.sysbox {{
+  border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface);
+  padding: 0.55rem 0.6rem 0.6rem; margin: 0.1rem 0 0.5rem;
+}}
+.sys-hd {{
+  display: flex; justify-content: space-between; align-items: baseline;
+  font-family: var(--mono); font-size: 0.62rem; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--faint); margin-bottom: 0.4rem;
+}}
+.sys-hd .c {{ color: var(--ghost); letter-spacing: 0.02em; text-transform: none; }}
+/* the second heading in the card gets the divider, so the rule is never a trailing edge */
+.sys-grid + .sys-hd {{
+  margin-top: 0.65rem; padding-top: 0.55rem; border-top: 1px solid var(--line);
+}}
+.sys-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 0.32rem 0.4rem; }}
+/* the chain is an order, not a set, so it stays a single wrapping line read left to right */
+.sys-grid.chain {{ display: flex; flex-wrap: wrap; gap: 0.32rem 0.6rem; }}
+.sys-item {{
+  display: inline-flex; align-items: center; gap: 0.32rem; min-width: 0;
+  font-family: var(--mono); font-size: 0.68rem; color: var(--dim); white-space: nowrap;
+}}
+/* only the dot carries the status colour — seven coloured words in one card read as an alarm */
+.sys-item .dot {{
+  width: 5px; height: 5px; border-radius: 50%; background: var(--good); flex: none;
+}}
+.sys-item.hot .dot {{ background: var(--warn); }}
+.sys-item.off {{ color: var(--ghost); }}
+.sys-item.off .dot {{ background: var(--line-2); }}
 .hist-m {{
   font-family: var(--mono); font-size: 0.62rem; color: var(--ghost);
   margin: -0.15rem 0 0.5rem 0.6rem; letter-spacing: 0.04em;
@@ -272,7 +381,7 @@ section[data-testid="stSidebar"] .lbl {{ margin: 1.35rem 0 0.35rem; }}
 .agent:hover {{ border-color: var(--accent-dim); box-shadow: var(--lift-2); }}
 .agent .badge {{
   display: inline-grid; place-items: center; width: 30px; height: 30px;
-  border-radius: var(--r-sm); font-family: var(--mono); font-size: 0.6rem;
+  border-radius: var(--r-sm); font-family: var(--mono); font-size: 0.64rem;
   font-weight: 600; letter-spacing: 0.05em; margin-bottom: 0.6rem;
   color: var(--accent); background: var(--accent-soft); border: 1px solid #cde6e2;
 }}
@@ -293,7 +402,7 @@ section[data-testid="stSidebar"] .lbl {{ margin: 1.35rem 0 0.35rem; }}
 }}
 .lbl::after {{ content: ''; flex: 1; height: 1px; background: var(--line); }}
 .lbl .n {{
-  font-size: 0.61rem; padding: 0.1rem 0.45rem; border-radius: 999px;
+  font-size: 0.64rem; padding: 0.1rem 0.45rem; border-radius: 999px;
   background: var(--surface-3); color: var(--faint); letter-spacing: 0.06em;
 }}
 .desc {{
@@ -312,7 +421,52 @@ section[data-testid="stSidebar"] .lbl {{ margin: 1.35rem 0 0.35rem; }}
 .chip.on {{ color: var(--good); }}
 .chip.hot {{ color: var(--warn); }}
 .chip.off {{ color: var(--ghost); }}
-.chip.accent {{ color: var(--accent); background: var(--accent-soft); border-color: #cde6e2; }}
+/* an indexed file is the one chip that is a thing the user put there, so it carries a
+   heavier border and weight than the status chips around it */
+.chip.accent {{
+  color: var(--accent); background: var(--accent-soft); border-color: var(--accent-dim);
+  font-weight: 500; box-shadow: var(--lift);
+}}
+
+/* the composer's attach, mic and send controls shipped at 40-60% opacity, which on this
+   ground made the paperclip almost invisible — the one control that opens the file feature */
+[data-testid="stBottom"] button[aria-label="Upload files"],
+[data-testid="stChatInputMicButton"] {{
+  color: var(--dim) !important; opacity: 1 !important;
+}}
+[data-testid="stBottom"] button[aria-label="Upload files"]:hover,
+[data-testid="stChatInputMicButton"]:hover {{
+  color: var(--accent) !important; background: var(--accent-soft) !important;
+}}
+[data-testid="stChatInputSubmitButton"] {{
+  color: var(--accent) !important; background: var(--accent-soft) !important;
+  border: 1px solid var(--accent-dim) !important; opacity: 1 !important;
+}}
+[data-testid="stChatInputSubmitButton"]:disabled {{
+  color: var(--faint) !important; background: var(--surface-3) !important;
+  border-color: var(--line) !important;
+}}
+/* a queued upload sat on the page ground with no border, so it read as blank space next to
+   the placeholder rather than as a file waiting to be sent */
+[data-testid="stFileChip"] {{
+  background: var(--surface) !important; border: 1px solid var(--accent-dim) !important;
+  border-radius: var(--r-sm) !important; box-shadow: var(--lift) !important;
+}}
+[data-testid="stFileChipName"] {{ font-weight: 500 !important; color: var(--text) !important; }}
+[data-testid="stFileChipImagePreview"] {{
+  border: 1px solid var(--line-2) !important; border-radius: 4px !important;
+  background: var(--surface-2) !important;
+}}
+[data-testid="stFileChipDeleteBtn"] {{ color: var(--faint) !important; }}
+[data-testid="stFileChipDeleteBtn"]:hover {{ color: var(--bad) !important; }}
+
+/* the composer is the primary control on the page and read as a disabled input box */
+[data-testid="stChatInput"] {{
+  border: 1px solid var(--line-2) !important; box-shadow: var(--lift) !important;
+}}
+[data-testid="stChatInput"]:focus-within {{
+  border-color: var(--accent) !important;
+}}
 
 /* ═══ the turn card — the centrepiece ══════════════════════════════════════ */
 .turn {{
@@ -333,12 +487,12 @@ section[data-testid="stSidebar"] .lbl {{ margin: 1.35rem 0 0.35rem; }}
 
 .turn-head {{ display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.55rem; }}
 .turn-head .who {{
-  font-family: var(--mono); font-size: 0.61rem; letter-spacing: 0.17em;
+  font-family: var(--mono); font-size: 0.64rem; letter-spacing: 0.17em;
   text-transform: uppercase; color: var(--ghost);
 }}
 .turn-head .rule {{ flex: 1; height: 1px; background: var(--line); }}
 .depth-chip {{
-  font-family: var(--mono); font-size: 0.61rem; letter-spacing: 0.13em;
+  font-family: var(--mono); font-size: 0.64rem; letter-spacing: 0.13em;
   text-transform: uppercase; color: var(--accent);
   background: var(--accent-soft); border: 1px solid #cde6e2;
   border-radius: 999px; padding: 0.14rem 0.58rem;
@@ -418,7 +572,7 @@ section[data-testid="stSidebar"] .lbl {{ margin: 1.35rem 0 0.35rem; }}
 .flow .node {{ text-align: center; min-width: 60px; }}
 .flow .box {{
   width: 38px; height: 38px; margin: 0 auto; border-radius: var(--r-sm);
-  display: grid; place-items: center; font-family: var(--mono); font-size: 0.6rem;
+  display: grid; place-items: center; font-family: var(--mono); font-size: 0.64rem;
   font-weight: 600; letter-spacing: 0.05em;
   border: 1px solid var(--line); background: var(--surface-2); color: var(--ghost);
   transition: all var(--ease);
@@ -428,7 +582,7 @@ section[data-testid="stSidebar"] .lbl {{ margin: 1.35rem 0 0.35rem; }}
   font-family: var(--mono); letter-spacing: 0.03em;
 }}
 .flow .node .hits {{
-  display: block; font-family: var(--mono); font-size: 0.6rem; color: var(--warn);
+  display: block; font-family: var(--mono); font-size: 0.64rem; color: var(--warn);
   margin-top: 0.1rem;
 }}
 .flow .node.done .box {{
@@ -451,7 +605,7 @@ section[data-testid="stSidebar"] .lbl {{ margin: 1.35rem 0 0.35rem; }}
   box-shadow: var(--lift); padding: 0.85rem 1.05rem; margin-bottom: 0.55rem;
 }}
 .asking .who {{
-  font-family: var(--mono); font-size: 0.61rem; letter-spacing: 0.17em;
+  font-family: var(--mono); font-size: 0.64rem; letter-spacing: 0.17em;
   text-transform: uppercase; color: var(--accent); flex: none;
 }}
 .asking .q {{
@@ -520,7 +674,7 @@ section[data-testid="stSidebar"] .lbl {{ margin: 1.35rem 0 0.35rem; }}
 }}
 .metric {{ background: var(--surface); padding: 0.75rem 0.9rem; }}
 .metric .k {{
-  font-family: var(--mono); font-size: 0.59rem; letter-spacing: 0.12em;
+  font-family: var(--mono); font-size: 0.63rem; letter-spacing: 0.1em;
   text-transform: uppercase; color: var(--ghost);
 }}
 .metric .v {{
@@ -557,7 +711,7 @@ section[data-testid="stSidebar"] .lbl {{ margin: 1.35rem 0 0.35rem; }}
   border-radius: var(--r); overflow: hidden; box-shadow: var(--lift);
 }}
 .tbl th {{
-  text-align: left; font-family: var(--mono); font-size: 0.6rem; letter-spacing: 0.12em;
+  text-align: left; font-family: var(--mono); font-size: 0.64rem; letter-spacing: 0.12em;
   text-transform: uppercase; color: var(--faint); font-weight: 500;
   padding: 0.6rem 0.8rem; background: var(--surface-2); border-bottom: 1px solid var(--line);
 }}
@@ -571,7 +725,7 @@ section[data-testid="stSidebar"] .lbl {{ margin: 1.35rem 0 0.35rem; }}
   background: var(--accent-soft); padding: 0.1rem 0.4rem; border-radius: 4px;
 }}
 .diverged {{
-  font-family: var(--mono); font-size: 0.59rem; color: var(--warn);
+  font-family: var(--mono); font-size: 0.63rem; color: var(--warn);
   background: #fbf0e2; padding: 0.1rem 0.38rem; border-radius: 4px;
   margin-left: 0.45rem; letter-spacing: 0.06em;
 }}
@@ -760,3 +914,20 @@ def badge_class(value: float, floor: float) -> str:
     if value >= floor:
         return "good"
     return "warn" if value >= WARN_FLOOR else "bad"
+
+
+_COLLAPSED_CSS = """
+<style>
+/* injected only while the sidebar is hidden — width, not display, so the widgets inside
+   keep their state and the show button can bring them straight back */
+section[data-testid="stSidebar"] {
+  width: 0 !important; min-width: 0 !important; max-width: 0 !important;
+  border-right: none !important; overflow: hidden !important;
+}
+</style>
+"""
+
+
+def collapsed_css() -> str:
+    """The extra sheet that hides the sidebar. Injected per-rerun while it is collapsed."""
+    return _COLLAPSED_CSS

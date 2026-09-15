@@ -65,3 +65,38 @@ async def test_cloud_mode_reports_a_pipeline_that_produced_nothing(
     result, _session, error = await app._run_cloud({"query": "qqq"}, lambda _: None)
     assert result is None
     assert error
+
+
+class _SessionOnly:
+    """app._toggle_sidebar only touches session_state, and a plain dict is one."""
+
+    def __init__(self) -> None:
+        self.session_state: dict[str, object] = {}
+
+
+def test_hiding_the_sidebar_is_reversible(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Streamlit's own collapse reopens from the app header this UI removes, so the toggle
+    has to round-trip on our flag or the sidebar is gone for the rest of the session."""
+    fake = _SessionOnly()
+    monkeypatch.setattr(app, "st", fake)
+
+    app._toggle_sidebar()
+    assert fake.session_state[app.SIDEBAR_HIDDEN] is True
+
+    app._toggle_sidebar()
+    assert fake.session_state[app.SIDEBAR_HIDDEN] is False
+
+
+def test_the_sidebar_starts_visible(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = _SessionOnly()
+    monkeypatch.setattr(app, "st", fake)
+    assert not fake.session_state.get(app.SIDEBAR_HIDDEN)
+
+
+def test_the_collapsed_sheet_hides_by_width_not_display() -> None:
+    """display:none would unmount the widgets inside and lose their state on reopen."""
+    from frontend.styles import collapsed_css
+
+    sheet = collapsed_css()
+    assert "width: 0 !important" in sheet
+    assert "display: none" not in sheet

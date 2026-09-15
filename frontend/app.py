@@ -31,14 +31,13 @@ from amaris.safety.guardrails import validate_input
 from frontend import thread
 from frontend.components import (
     asking,
-    capability_strip,
     depth_table,
     hero,
     label,
     mini_metrics,
-    provider_strip,
+    system_panel,
 )
-from frontend.styles import inject_css, wordmark
+from frontend.styles import collapsed_css, inject_css, wordmark
 from frontend.views import inspection, landing, live_run
 
 TERMINAL = ("done", "failed")
@@ -59,6 +58,13 @@ DEPTH_KEY = "depth_choice"
 # streamlit drops the state of a widget that a rerun did not draw, and a run returns early
 # before the picker — so the choice is mirrored here, where nothing collects it
 DEPTH_SAVED = "depth_choice_saved"
+# the sidebar collapses on our own flag: streamlit's control reopens from the app header,
+# which this UI removes, so its own collapse is a one-way door
+SIDEBAR_HIDDEN = "sidebar_hidden"
+# solid triangles rather than chevrons: ruff rejects the chevron characters as
+# look-alikes for < and >, and these read as direction at any size
+HIDE_MARK = "◀"
+SHOW_MARK = "▶"
 # from real runs, not from the budget numbers: brief measured 94s and deep 206s. scraping and
 # the evaluator's ~45s dominate, so even the shallow depths are a minute rather than seconds
 DEPTH_ETA = {"brief": "~1-2 min", "standard": "~2-3 min", "deep": "~3-6 min"}
@@ -204,17 +210,27 @@ def _capabilities() -> dict[str, bool]:
     }
 
 
+def _toggle_sidebar() -> None:
+    st.session_state[SIDEBAR_HIDDEN] = not st.session_state.get(SIDEBAR_HIDDEN, False)
+
+
 def _sidebar(mode: str) -> None:
     """Deliberately lean — status and the thread. Full configuration lives in the System tab."""
+    head, control = st.columns([1, 0.4], vertical_alignment="center")
+    with head:
+        st.markdown(wordmark("sb-mark"), unsafe_allow_html=True)
+    with control:
+        # in the header row rather than absolutely positioned in the corner, where it floated
+        # above the wordmark and read as a stray control belonging to nothing
+        st.button(HIDE_MARK, key="sb_hide", help="collapse the sidebar", on_click=_toggle_sidebar)
     st.markdown(
-        f'{wordmark("sb-mark")}<div class="sb-sub">research console · {html.escape(mode)}</div>',
+        f'<div class="sb-sub">research console'
+        f'<span class="sb-mode">{html.escape(mode)}</span></div>',
         unsafe_allow_html=True,
     )
-    label("providers", hint="fallback order · n = cooldown")
-    provider_strip()
 
-    label("capabilities", hint="grey = off or unreachable")
-    capability_strip(_capabilities())
+    label("system", hint="fallback order · grey = off")
+    system_panel(_capabilities())
 
     files = thread.attachments()
     if files:
@@ -239,29 +255,33 @@ def _sidebar(mode: str) -> None:
 
     # nothing to show about a conversation that has not started, so the space goes to the
     # one thing the picker below the composer never explains: what the other depths cost
-    label("depth budgets", hint="pick one by the composer, or let triage choose")
+    label("depth budgets", hint="chosen by the composer")
     depth_table()
 
 
 def _session_actions() -> None:
     """Take the whole conversation away, or drop it. Per-turn export lives on the turn card."""
-    if find_spec("docx") is not None:
-        from amaris.export import build_markdown_docx, docx_filename
+    left, right = st.columns(2)
+    with left:
+        if find_spec("docx") is not None:
+            from amaris.export import build_markdown_docx, docx_filename
 
-        st.download_button(
-            "download conversation",
-            # a callable so the transcript is built on click, not on every rerun
-            data=lambda: build_markdown_docx(
-                thread.transcript_markdown(), "AMARIS research conversation"
-            ),
-            file_name=docx_filename("conversation"),
-            mime=DOCX_MIME,
-            key="dl_thread",
-            use_container_width=True,
-        )
-    if st.button("start over", use_container_width=True):
-        thread.clear()
-        st.rerun()
+            st.download_button(
+                "save .docx",
+                # a callable so the transcript is built on click, not on every rerun
+                data=lambda: build_markdown_docx(
+                    thread.transcript_markdown(), "AMARIS research conversation"
+                ),
+                file_name=docx_filename("conversation"),
+                mime=DOCX_MIME,
+                key="dl_thread",
+                help="every turn in this conversation as one document",
+                use_container_width=True,
+            )
+    with right:
+        if st.button("start over", use_container_width=True, help="drop the whole conversation"):
+            thread.clear()
+            st.rerun()
 
 
 def _ingest_files(files: list[Any]) -> bool:
@@ -386,6 +406,11 @@ def main() -> None:
     inject_css()
 
     from amaris.llm.router import configured_chain
+
+    hidden = bool(st.session_state.get(SIDEBAR_HIDDEN))
+    if hidden:
+        st.markdown(collapsed_css(), unsafe_allow_html=True)
+        st.button(SHOW_MARK, key="sb_show", help="bring the sidebar back", on_click=_toggle_sidebar)
 
     with st.sidebar:
         _sidebar(settings.deployment_mode)

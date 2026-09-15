@@ -442,7 +442,7 @@ def test_the_sidebar_flags_a_parked_provider(fake: FakeStreamlit, monkeypatch) -
     fake.warning = warnings.append
     fake.error = lambda body: warnings.append(f"ERROR {body}")
 
-    components.provider_strip()
+    components.system_panel({})
 
     assert "3600s" in fake.drawn
     assert any("only glm usable" in w for w in warnings)
@@ -457,7 +457,7 @@ def test_the_sidebar_refuses_a_fully_parked_chain(fake: FakeStreamlit, monkeypat
     fake.error = errors.append
     fake.warning = lambda body: None
 
-    components.provider_strip()
+    components.system_panel({})
     assert any("every provider is rate limited" in e for e in errors)
 
 
@@ -490,19 +490,39 @@ def test_the_question_is_escaped_before_it_is_drawn(fake: FakeStreamlit) -> None
     assert "&lt;img" in drawn
 
 
-def test_a_live_capability_is_visually_distinct_from_a_missing_one(fake: FakeStreamlit) -> None:
-    """ADR-009 degrades silently on purpose, so the only signal a user gets is this strip."""
-    components.capability_strip({"memory": True, "docx": False})
+def test_a_live_capability_is_visually_distinct_from_a_missing_one(
+    fake: FakeStreamlit, monkeypatch
+) -> None:
+    """ADR-009 degrades silently on purpose, so the only signal a user gets is this card."""
+    from amaris.llm import router
 
-    assert 'class="chip cap on"' in fake.drawn
-    assert 'class="chip cap off"' in fake.drawn
+    monkeypatch.setattr(router, "provider_status", lambda: {})
+    monkeypatch.setattr(router, "configured_chain", lambda: ["groq"])
+    fake.warning = lambda body: None
+
+    components.system_panel({"memory": True, "docx": False})
+
+    assert 'class="sys-item on"' in fake.drawn
+    assert 'class="sys-item off"' in fake.drawn
     assert "memory" in fake.drawn and "docx" in fake.drawn
+    # the counts are what make the card glanceable — a 1/2 says something is off without reading
+    assert "1/2 live" in fake.drawn
 
 
-def test_capability_names_opt_out_of_the_full_width_chip_rule(fake: FakeStreamlit) -> None:
-    """Four full-width rows cost more sidebar height than the information is worth."""
-    components.capability_strip({"memory": True})
-    assert "chip cap" in fake.drawn
+def test_the_system_card_is_one_element_so_nothing_can_be_laid_over_it(
+    fake: FakeStreamlit, monkeypatch
+) -> None:
+    """Two labelled sections of chips is what this replaced, and each wrapper was a collision."""
+    from amaris.llm import router
+
+    monkeypatch.setattr(router, "provider_status", lambda: {})
+    monkeypatch.setattr(router, "configured_chain", lambda: ["groq", "gemini"])
+    fake.warning = lambda body: None
+
+    components.system_panel({"memory": True})
+
+    assert len(fake.html) == 1
+    assert "2/2 ready" in fake.drawn
 
 
 def test_mini_metrics_draws_nothing_when_there_is_nothing_to_report(
@@ -548,3 +568,13 @@ def test_the_depth_table_is_read_from_the_budgets_so_it_cannot_drift(
     assert f"<span>{deep.word_target}</span>" in fake.drawn
     for depth in ("direct", "brief", "standard", "deep"):
         assert depth in fake.drawn
+
+
+def test_no_text_in_the_depth_table_is_below_a_readable_size() -> None:
+    """The header shipped at 0.52rem — about 8px — which no contrast fix could rescue."""
+    import re
+
+    from frontend.styles import _CSS
+
+    tiny = [m for m in re.findall(r"font-size:\s*(0\.\d+)rem", _CSS) if float(m) < 0.62]
+    assert not tiny, f"font sizes below 0.62rem are unreadable: {tiny}"

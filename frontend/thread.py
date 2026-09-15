@@ -415,7 +415,8 @@ def thread_sidebar() -> None:
         score = result.trace.quality_score if result and result.trace else None
         tag = f"{score:.2f}" if score else ("err" if turn.get("error") else "—")
         query = str(turn["query"])
-        text = query if len(query) <= 20 else f"{query[:20]}…"
+        # a backstop only — the button clips with a CSS ellipsis, which knows the real width
+        text = query if len(query) <= 40 else f"{query[:40]}…"
         mark = "▸ " if index == focused else ""
         if st.button(f"{mark}{tag}  {text}", key=f"thr_{index}", use_container_width=True):
             st.session_state[SELECTED] = index
