@@ -24,6 +24,7 @@ TERMINAL = ("done", "failed")
 FLOW_TAGS = {
     "triage": "TRI",
     "clarify": "ASK",
+    "live": "LIV",
     "planner": "PLN",
     "researcher": "RSH",
     "analyst": "ANL",
@@ -37,6 +38,12 @@ EVAL_METRICS = ("context_precision", "context_recall", "faithfulness", "answer_r
 # what each agent DECIDES is the interesting column — a list of duties would not show autonomy
 AGENT_ROWS: tuple[tuple[str, str, str, str], ...] = (
     ("TRI", "triage", "budget setter", "how much work the question is worth, before any is spent"),
+    (
+        "LIV",
+        "live data",
+        "lookup",
+        "current conditions are read from a data source, not researched",
+    ),
     ("SUP", "supervisor", "agentic core", "the two calls state cannot settle on its own"),
     ("PLN", "planner", "decomposition", "how few tasks the question can be answered with"),
     ("RSH", "researcher", "ReAct loop", "when it has gathered enough — the graph never stops it"),

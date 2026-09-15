@@ -15,6 +15,9 @@ if TYPE_CHECKING:
     from amaris.graph.state import GraphState
 
 SOURCE_CHARS = 500
+# the writer never reads more than this many sources however deep the run went: 20 x 500 chars
+# plus an 1100-word target was the one call that reliably timed out (ADR-041)
+WRITER_SOURCE_CAP = 14
 
 # gpt-oss reaches for fullwidth brackets when citing, which no [n] matcher downstream finds.
 # it also tags them — 【1†source】 — so anything after the digits inside the pair is dropped
@@ -186,7 +189,7 @@ class WriterAgent(BaseAgent):
         return select_for_prompt(
             subject(state),
             state["raw_research"],
-            self.settings.max_sources_in_prompt,
+            min(self.settings.max_sources_in_prompt, WRITER_SOURCE_CAP),
             self.settings.relevance_floor,
         )
 

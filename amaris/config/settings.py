@@ -110,8 +110,9 @@ class Settings(BaseSettings):
     email_allowed_domains: list[str] = Field(default_factory=list)
     email_max_per_session: int = Field(default=5, ge=1)
 
-    # groq's tokens-per-minute window is ~60s, so a shorter retry budget can never recover from it
-    llm_retry_budget_seconds: float = Field(default=75.0, ge=0.0)
+    # must exceed the slowest single request (GLM, 90s) or the budget is spent before the first
+    # attempt returns and no retry is ever possible — which is how a deep writer call died once
+    llm_retry_budget_seconds: float = Field(default=150.0, ge=0.0)
     # ragas makes one judge call per metric per context, so it needs its own ceiling
     ragas_timeout_seconds: float = Field(default=120.0, ge=1.0)
 

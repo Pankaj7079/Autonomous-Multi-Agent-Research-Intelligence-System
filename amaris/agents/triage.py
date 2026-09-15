@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from amaris.agents.base_agent import BaseAgent
 from amaris.graph.state import DEFAULT_DEPTH, DEPTHS
 from amaris.observability.logging import logger
+from amaris.tools.weather_tool import place_for_weather_query
 
 if TYPE_CHECKING:
     from amaris.graph.state import GraphState
@@ -168,6 +169,11 @@ class TriageAgent(BaseAgent):
     task_type = "triage"
 
     async def _run(self, state: GraphState) -> dict[str, Any]:
+        # checked before the depth lock: picking "deep" does not make scraping the right way to
+        # find out what the temperature is right now (ADR-041)
+        place = place_for_weather_query(state["original_query"])
+        if place:
+            return self._live(place)
         if state.get("depth_locked"):
             return self._locked(state)
         try:
@@ -185,6 +191,20 @@ class TriageAgent(BaseAgent):
             payload = TriageOutput()
 
         return self._settle(payload)
+
+    def _live(self, place: str) -> dict[str, Any]:
+        """A question about live state is handed to a data source, so no research is planned."""
+        logger.bind(kind="weather", place=place[:60], llm_decided=False).info("triage.live")
+        return {
+            "query_depth": "direct",
+            "depth_locked": False,
+            "answerable": True,
+            "clarifying_question": "",
+            "live_data": {"kind": "weather", "place": place},
+            "report_sections": ["Answer"],
+            "word_target": budget_for("direct").word_target,
+            "triage_reason": f"current conditions for {place}, read from a data source",
+        }
 
     def _locked(self, state: GraphState) -> dict[str, Any]:
         """The user picked the depth, so it is already decided and costs no model call."""

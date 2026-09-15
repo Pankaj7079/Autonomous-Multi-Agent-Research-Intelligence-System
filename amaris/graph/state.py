@@ -23,9 +23,10 @@ ANALYST = "analyst"
 WRITER = "writer"
 CRITIC = "critic"
 
-# nodes, not routing choices — the supervisor is never asked to pick either of these
+# nodes, not routing choices — the supervisor is never asked to pick any of these
 TRIAGE = "triage"
 CLARIFY = "clarify"
+LIVE = "live"
 
 # every value state["next_agent"] is allowed to take
 AGENTS = (PLANNER, RESEARCHER, ANALYST, WRITER, CRITIC)
@@ -104,6 +105,10 @@ class GraphState(TypedDict):
     # what the report's citations actually support, checked without a model call (ADR-039)
     citation_audit: dict[str, Any]
 
+    # set by triage when the question asks for live state rather than research, e.g.
+    # {"kind": "weather", "place": "Darbhanga"} — the live node answers it from a data source
+    live_data: dict[str, Any]
+
     # set by any node that failed; the supervisor sees it and routes to FINISH
     error: str | None
 
@@ -155,6 +160,7 @@ def new_state(
         final_report="",
         evaluation_scores={},
         citation_audit={},
+        live_data={},
         error=None,
     )
     for key in SEEDABLE:

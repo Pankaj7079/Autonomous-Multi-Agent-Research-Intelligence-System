@@ -31,6 +31,7 @@ AGENT_PROGRESS: dict[str, int] = {
     "analyst": 65,
     "writer": 85,
     "critic": 92,
+    "live": 90,
     "evaluator": 96,
 }
 DONE_PROGRESS = 100
@@ -49,6 +50,7 @@ _AGENT_MESSAGES: dict[str, str] = {
     "writer": "drafting the report with citations",
     "critic": "reviewing the draft",
     "evaluator": "scoring the finished run",
+    "live": "reading current conditions from a data source",
 }
 
 
@@ -127,6 +129,8 @@ class RunTrace(BaseModel):
     triage: dict[str, Any] = Field(default_factory=dict)
     # the citation audit: which cited claims were found in the pages they cite (ADR-039)
     audit: dict[str, Any] = Field(default_factory=dict)
+    # non-empty when the answer came from a data source rather than research (ADR-041)
+    live: dict[str, Any] = Field(default_factory=dict)
 
 
 class ResearchResult(BaseModel):
@@ -251,6 +255,7 @@ def result_from_state(state: GraphState) -> ResearchResult:
             quality_score=state["quality_score"],
             sources=[_trim_source(item) for item in state["raw_research"]],
             audit=state.get("citation_audit") or {},
+            live=state.get("live_data") or {},
             triage={
                 "depth": state.get("query_depth", ""),
                 "answerable": state.get("answerable", True),

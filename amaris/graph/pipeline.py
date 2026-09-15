@@ -15,6 +15,7 @@ from amaris.graph.nodes import (
     clarify_node,
     critic_node,
     evaluator_node,
+    live_node,
     planner_node,
     researcher_node,
     supervisor_node,
@@ -33,6 +34,7 @@ if TYPE_CHECKING:
 NODES = {
     "triage": triage_node,
     "clarify": clarify_node,
+    "live": live_node,
     "supervisor": supervisor_node,
     "planner": planner_node,
     "researcher": researcher_node,

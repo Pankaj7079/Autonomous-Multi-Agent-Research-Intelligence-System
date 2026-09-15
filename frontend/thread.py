@@ -119,8 +119,11 @@ def session_totals() -> dict[str, str]:
         for source in trace.sources
         if source.get("url")
     }
+    # a live-data answer is never scored by the critic, so averaging its 0.0 in would report
+    # the conversation as failing when nothing failed
+    judged = [t.quality_score for t in traces if t.quality_score]
     return {
-        "Avg score": f"{sum(t.quality_score for t in traces) / len(traces):.2f}",
+        "Avg score": f"{sum(judged) / len(judged):.2f}" if judged else "—",
         "Sources": str(len(urls)),
         "Elapsed": f"{seconds / 60:.1f}m" if seconds >= 60 else f"{seconds:.0f}s",
         "Routing": str(sum(len(t.decisions) for t in traces)),
@@ -222,6 +225,10 @@ def _meta_html(turn: dict[str, Any]) -> str:
 
     if result.awaiting_clarification:
         chip = '<span class="vchip warn"><span class="dot"></span>needs a detail</span>'
+    elif trace.live.get("source"):
+        # no critic ran, so a 0.00 score chip here would read as a failed answer
+        source = html.escape(str(trace.live["source"]))
+        chip = f'<span class="vchip good"><span class="dot"></span>live · {source}</span>'
     else:
         state = badge_class(score, floor)
         verdict = "approved" if score >= floor else "below floor"

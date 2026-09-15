@@ -311,6 +311,9 @@ async def test_slow_calls_count_against_the_budget_even_with_no_waiting(
     monkeypatch.setattr(base_module, "chain_wait_seconds", lambda: 0.0)
     monkeypatch.setattr(base_module.time, "monotonic", lambda: clock["now"])
     monkeypatch.setattr(base_module.asyncio, "sleep", _record([]))
+    # pinned rather than read from settings: this test is about the budget being spent by slow
+    # calls, not about whatever the configured default happens to be
+    monkeypatch.setattr(probe.settings, "llm_retry_budget_seconds", 75.0)
 
     with pytest.raises(AgentError, match="retry budget"):
         await probe._invoke("prompt")

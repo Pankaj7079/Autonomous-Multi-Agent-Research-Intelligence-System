@@ -27,6 +27,9 @@ _EMAIL = re.compile(r"\b[\w.%+-]+@[\w.-]+\.[A-Za-z]{2,}\b")
 # groupings differ by country (+91 98765 43210 vs 555-123-4567), so match a loose
 # candidate and let the digit count decide, rather than encoding every national format
 _PHONE = re.compile(r"(?<![\w.])\(?\+?\d[\d ()-]{8,18}\d(?![\w.])")
+# "2026-09-15 16:45" is ten digits with separators, so it read as a phone and a live weather
+# answer shipped with its timestamp masked out
+_DATELIKE = re.compile(r"\d{4}-\d{1,2}-\d{1,2}")
 # the tail guard allows a separator: "1234 5678 9012 3456 7" is an id, not an aadhaar
 _AADHAAR = re.compile(r"(?<!\d)\d{4}[ -]\d{4}[ -]\d{4}(?![ -]?\d)")
 _PAN = re.compile(r"\b[A-Z]{5}\d{4}[A-Z]\b")
@@ -67,6 +70,8 @@ def _phone_matches(text: str) -> list[PIIMatch]:
     matches = []
     for found in _PHONE.finditer(text):
         raw = found.group()
+        if _DATELIKE.search(raw):
+            continue
         digits = re.sub(r"\D", "", raw)
         if 10 <= len(digits) <= 15 and (raw.startswith("+") or any(c in raw for c in " -()")):
             matches.append(PIIMatch("phone", found.span(), raw))

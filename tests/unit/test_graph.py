@@ -10,7 +10,7 @@ from amaris.graph import nodes as nodes_module
 from amaris.graph.edges import EVALUATOR, ROUTE_MAP, route_from_supervisor, route_from_triage
 from amaris.graph.nodes import clarify_node, evaluator_node, researcher_node, supervisor_node
 from amaris.graph.pipeline import build_graph, run_config
-from amaris.graph.state import AGENTS, CLARIFY, FINISH, PLANNER, TRIAGE, new_state
+from amaris.graph.state import AGENTS, CLARIFY, FINISH, LIVE, PLANNER, TRIAGE, new_state
 
 # critic is not here on purpose: writer → critic is a fixed edge, never a routing choice
 ROUTABLE = tuple(a for a in ROUTE_MAP if a != FINISH)
@@ -47,7 +47,7 @@ def test_empty_next_agent_falls_back_to_finish() -> None:
 def test_graph_has_every_node() -> None:
     compiled = build_graph().compile()
     names = {n for n in compiled.get_graph().nodes if not n.startswith("__")}
-    assert names == {*AGENTS, TRIAGE, CLARIFY, "supervisor", EVALUATOR}
+    assert names == {*AGENTS, TRIAGE, CLARIFY, LIVE, "supervisor", EVALUATOR}
 
 
 def test_triage_runs_before_anything_is_spent() -> None:

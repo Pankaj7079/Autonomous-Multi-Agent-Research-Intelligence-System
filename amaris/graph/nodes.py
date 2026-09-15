@@ -32,6 +32,14 @@ I need one more detail before I can research this.
 
 {reason}"""
 
+LIVE_TEMPLATE = """## Answer
+
+{summary} [1].
+
+## References
+
+[1] {title} — {url}"""
+
 
 async def _run_node(
     agent_class: type[BaseAgent], state: GraphState, track_path: bool = True
@@ -78,6 +86,44 @@ async def clarify_node(state: GraphState) -> dict[str, Any]:
         "draft_report": report,
         "next_agent": FINISH,
         "agent_path": [*state["agent_path"], "clarify"],
+    }
+
+
+async def live_node(state: GraphState) -> dict[str, Any]:
+    """Answer a live-state question from a data source instead of researching it.
+
+    Returns an empty live_data when the lookup fails, which routes the run back to the planner —
+    a wrong guess about the place costs one HTTP call, not the answer (ADR-041).
+    """
+    from amaris.tools.weather_tool import current_weather
+
+    place = str((state["live_data"] or {}).get("place", ""))
+    reading = await current_weather(place)
+    if reading is None:
+        logger.bind(place=place[:60]).info("live.fell_back_to_research")
+        return {"live_data": {}, "agent_path": [*state["agent_path"], "live"]}
+
+    summary = reading.summary()
+    title = f"Open-Meteo — current conditions for {reading.where}"
+    report = LIVE_TEMPLATE.format(summary=summary, title=title, url=reading.source_url)
+    logger.bind(place=reading.where[:80], observed=reading.observed).info("live.answered")
+    return {
+        "draft_report": report,
+        "final_report": report,
+        "citations": [{"index": 1, "title": title, "url": reading.source_url}],
+        # the reading is the evidence, so the citation audit checks the figures against it
+        "raw_research": [
+            {
+                "title": title,
+                "url": reading.source_url,
+                "content": summary,
+                "task_id": "live",
+                "source": "open-meteo",
+            }
+        ],
+        "live_data": {**state["live_data"], "source": "Open-Meteo", "observed": reading.observed},
+        "next_agent": FINISH,
+        "agent_path": [*state["agent_path"], "live"],
     }
 
 

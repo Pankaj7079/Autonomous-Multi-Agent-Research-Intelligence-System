@@ -11,6 +11,7 @@ from amaris.graph.state import (
     ANALYST,
     CLARIFY,
     FINISH,
+    LIVE,
     PLANNER,
     RESEARCHER,
     TRIAGE,
@@ -35,15 +36,29 @@ ROUTE_MAP = {
     FINISH: EVALUATOR,
 }
 
-TRIAGE_MAP = {PLANNER: PLANNER, CLARIFY: CLARIFY}
+TRIAGE_MAP = {PLANNER: PLANNER, CLARIFY: CLARIFY, LIVE: LIVE}
+# where the live node may go: it answered, or the lookup failed and research takes over
+LIVE_MAP = {EVALUATOR: EVALUATOR, PLANNER: PLANNER}
 
 
 def route_from_triage(state: GraphState) -> str:
     """An unanswerable question is asked back instead of researched — it never reaches an agent."""
+    if state.get("live_data"):
+        # live state is looked up, not researched: scraping for it returns last month's averages
+        logger.bind(kind=state["live_data"].get("kind", "")).info("edges.live")
+        return LIVE
     if state.get("answerable", True):
         return PLANNER
     logger.bind(question=state.get("clarifying_question", "")[:80]).info("edges.clarify")
     return CLARIFY
+
+
+def route_from_live(state: GraphState) -> str:
+    """Did the data source answer? If not, the question still deserves the research path."""
+    if state.get("final_report"):
+        return EVALUATOR
+    logger.info("edges.live_missed")
+    return PLANNER
 
 
 def route_from_supervisor(state: GraphState) -> str:
@@ -60,6 +75,7 @@ def register_edges(workflow: StateGraph) -> None:
     """Wire the graph. Only two edges are conditional, and both sit on a real decision."""
     workflow.add_conditional_edges(TRIAGE, route_from_triage, TRIAGE_MAP)
     workflow.add_edge(CLARIFY, END)
+    workflow.add_conditional_edges(LIVE, route_from_live, LIVE_MAP)
 
     # a plan always needs researching and research always needs writing up — asking a model
     # to confirm that cost a call per hop and never once chose differently
