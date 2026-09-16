@@ -203,6 +203,7 @@ search = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "amaris", extra = ["evaluation", "export", "files", "mcp", "observability", "scraping", "search"] },
     { name = "gitpython" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -257,6 +258,7 @@ provides-extras = ["search", "scraping", "memory", "evaluation", "mcp", "observa
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "amaris", extras = ["files", "scraping", "search", "observability", "mcp", "export", "evaluation"] },
     { name = "gitpython", specifier = ">=3.1.62" },
     { name = "pytest", specifier = ">=8.0.0" },
     { name = "pytest-asyncio", specifier = ">=0.24.0" },

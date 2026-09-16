@@ -118,6 +118,10 @@ async def get_pipeline() -> CompiledStateGraph:
 async def reset_pipeline() -> None:
     """Drop the singleton and close the checkpoint connection. Used by tests and shutdown."""
     global _pipeline, _checkpointer
+    from amaris.tools.scraper_tool import close_scraper
+
+    # the scraper now keeps one browser alive for the process, so shutdown has to end it
+    await close_scraper()
     if _checkpointer is not None and hasattr(_checkpointer, "conn"):
         await _checkpointer.conn.close()
     _pipeline = None

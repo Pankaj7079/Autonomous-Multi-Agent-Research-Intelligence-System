@@ -98,6 +98,10 @@ dev = [
     "ruff>=0.8.0",
     "pytest-mock>=3.14.0",
     "gitpython>=3.1.62",
+    # local dev runs the whole stack — without this a bare `uv run` drops crawl4ai and the
+    # researcher falls back to 300-char snippets. the image installs extras explicitly and
+    # builds with --no-dev, so none of this ships (ADR-009)
+    "amaris[files,scraping,search,observability,mcp,export,evaluation]",
 ]
 
 [build-system]

@@ -104,16 +104,23 @@ def _golden_checks(golden: GoldenQuery, state: GraphState) -> list[EvalResult]:
     return results
 
 
-async def _score_one(golden: GoldenQuery, state: GraphState) -> list[EvalResult]:
-    """All three layers for one query. Each evaluator already degrades to zero, never raises."""
+async def _score_one(
+    golden: GoldenQuery, state: GraphState, *, use_judge: bool = True
+) -> list[EvalResult]:
+    """All three layers for one query. Each evaluator already degrades to zero, never raises.
+
+    use_judge=False skips retrieval and report — the two layers that spend a judge model call —
+    and keeps trajectory and the golden checks, which read only state already recorded and cost
+    nothing. That split is what makes a cheap smoke run possible on a free-tier quota.
+    """
     prefix = f"[{golden.id}] "
     results: list[EvalResult] = []
 
-    for evaluator, label in (
-        (RetrievalEvaluator(), "retrieval"),
-        (ReportEvaluator(), "report"),
-        (TrajectoryEvaluator(), "trajectory"),
-    ):
+    layers: list[tuple[Any, str]] = [(TrajectoryEvaluator(), "trajectory")]
+    if use_judge:
+        layers = [(RetrievalEvaluator(), "retrieval"), (ReportEvaluator(), "report"), *layers]
+
+    for evaluator, label in layers:
         try:
             if label == "retrieval":
                 scored = await evaluator.evaluate(state, reference=golden.reference_answer)
@@ -133,8 +140,15 @@ async def _score_one(golden: GoldenQuery, state: GraphState) -> list[EvalResult]
     return results
 
 
-async def run_evaluation(golden_set: list[GoldenQuery], pipeline: PipelineRunner) -> EvalReport:
-    """Runs every golden query through the pipeline and scores it on all three layers."""
+async def run_evaluation(
+    golden_set: list[GoldenQuery], pipeline: PipelineRunner, *, use_judge: bool = True
+) -> EvalReport:
+    """Runs every golden query through the pipeline and scores it on all three layers.
+
+    use_judge=False is the smoke-test path: routing, depth-sizing and the citation-audit-free
+    trajectory layer still get scored on every query, but no RAGAS judge call is made, so this
+    is safe to run on a free-tier quota before spending it on the full judged report.
+    """
     all_results: list[EvalResult] = []
 
     for golden in golden_set:
@@ -148,7 +162,7 @@ async def run_evaluation(golden_set: list[GoldenQuery], pipeline: PipelineRunner
             )
             continue
 
-        all_results.extend(await _score_one(golden, state))
+        all_results.extend(await _score_one(golden, state, use_judge=use_judge))
         logger.bind(query_id=golden.id).info("harness.query_done")
 
     return EvalReport(
@@ -210,13 +224,20 @@ async def _main() -> None:
     parser.add_argument("--golden", default="tests/golden/queries.yaml")
     parser.add_argument("--compare-with", default=None, help="an earlier evals/report_*.json")
     parser.add_argument("--out-dir", default=str(EVALS_DIR))
+    parser.add_argument(
+        "--no-judge",
+        action="store_true",
+        help="skip retrieval/report (the two RAGAS-judged layers) — a free smoke run",
+    )
     args = parser.parse_args()
 
     configure_from_settings()
     golden_set = load_golden_set(args.golden)
-    logger.bind(count=len(golden_set), path=args.golden).info("harness.start")
+    logger.bind(count=len(golden_set), path=args.golden, judge=not args.no_judge).info(
+        "harness.start"
+    )
 
-    report = await run_evaluation(golden_set, pipeline=run_research)
+    report = await run_evaluation(golden_set, pipeline=run_research, use_judge=not args.no_judge)
     md_path, json_path = _write_report(report, Path(args.out_dir))
 
     logger.bind(

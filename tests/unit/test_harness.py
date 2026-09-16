@@ -168,6 +168,22 @@ async def test_a_crashed_query_does_not_lose_the_rest(monkeypatch: pytest.Monkey
     assert any("[ok]" in r.detail for r in report.results)
 
 
+async def test_no_judge_skips_retrieval_and_report_but_keeps_trajectory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The smoke-test path: no RAGAS call, but the free layers still score every query."""
+
+    async def fake_pipeline(query: str) -> dict:
+        return finished_state()
+
+    report = await run_evaluation([golden()], pipeline=fake_pipeline, use_judge=False)
+    layers = {r.layer for r in report.results}
+    assert "retrieval" not in layers
+    assert "report" not in layers
+    assert "trajectory" in layers
+    assert "golden_set" in layers
+
+
 async def test_a_layer_crash_still_returns_the_other_layers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
