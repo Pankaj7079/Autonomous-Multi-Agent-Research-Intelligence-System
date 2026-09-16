@@ -126,7 +126,6 @@ async def reset_pipeline() -> None:
 
 def run_config(session_id: str) -> dict[str, Any]:
     """thread_id is the session, so a resumed run picks up its own checkpoints."""
-    from amaris.observability.tracing import callbacks
 
     settings = get_settings()
     config: dict[str, Any] = {
@@ -134,11 +133,6 @@ def run_config(session_id: str) -> dict[str, Any]:
         # each supervisor hop costs two graph steps, so the cap needs headroom
         "recursion_limit": settings.max_supervisor_steps * 2 + 5,
     }
-    # attached once at the top: langgraph passes callbacks down, so every nested model call
-    # is traced without a single agent knowing a tracer exists
-    handlers = callbacks()
-    if handlers:
-        config["callbacks"] = handlers
     return config
 
 

@@ -65,8 +65,8 @@ evaluation = ["ragas>=0.2.0", "datasets>=3.0.0"]
 # Tool exposure over MCP.
 mcp = ["mcp>=1.0.0", "fastmcp>=2.0.0"]
 
-# Tracing — pick one, both are optional.
-observability = ["langsmith>=0.2.0", "langfuse>=4.0.0"]
+# Tracing — optional; langsmith is the only backend (ADR-046).
+observability = ["langsmith>=0.2.0"]
 
 # Everything except the extras that need a compiler or a browser download.
 full = [

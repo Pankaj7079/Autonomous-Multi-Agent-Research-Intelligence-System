@@ -61,6 +61,34 @@ def _golden_checks(golden: GoldenQuery, state: GraphState) -> list[EvalResult]:
         )
     )
 
+    forbidden = involved & set(golden.forbidden_agents)
+    if golden.forbidden_agents:
+        results.append(
+            EvalResult(
+                layer=layer,
+                metric="agents_skipped",
+                score=0.0 if forbidden else 1.0,
+                passed=not forbidden,
+                detail=f"[{golden.id}] ran {forbidden}, which this question should not need"
+                if forbidden
+                else f"[{golden.id}] skipped {set(golden.forbidden_agents)} as expected",
+            )
+        )
+
+    # sizing drives every downstream budget, so a wrong depth is a wrong run even if it answers
+    if golden.expected_depth:
+        depth = state["query_depth"]
+        ok = depth in golden.expected_depth
+        results.append(
+            EvalResult(
+                layer=layer,
+                metric="depth_sized",
+                score=1.0 if ok else 0.0,
+                passed=ok,
+                detail=f"[{golden.id}] triaged as {depth}, expected one of {golden.expected_depth}",
+            )
+        )
+
     if golden.should_require_revision:
         revised = state["revision_count"] > 0
         results.append(

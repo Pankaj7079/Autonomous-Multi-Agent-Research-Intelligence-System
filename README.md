@@ -1,12 +1,5 @@
 ---
 title: AMARIS
-emoji: 🔭
-colorFrom: gray
-colorTo: green
-sdk: docker
-app_port: 7860
-pinned: false
-license: mit
 short_description: Multi-agent research system with a supervisor that routes at run time
 ---
 
@@ -35,46 +28,76 @@ autonomy.
 
 ## Architecture
 
-![AMARIS request lifecycle](assets/architecture.svg)
+```mermaid
+flowchart TB
+    Q([question · text, PDF, voice]) --> E[edge · guardrails, PII mask]
+    E --> T[triage · sizes the run]
+    T --> P[planner · splits it up]
+    P --> R[researcher · ReAct loop]
+    R --> G1{{GATE 1 · enough to write?}}
+    G1 --> A[analyst · synthesise]
+    A --> W[writer · cited report]
+    W --> C[critic · 4 scores + hint]
+    C --> G2{{GATE 2 · what next?}}
+    G2 --> V([report · citation audit])
+
+    G1 -. "quality under 0.60" .-> R
+    G2 -. "fix_writing" .-> W
+    G2 -. "need_more_research" .-> R
+    G2 -. "wrong_topic" .-> P
+
+    classDef gate fill:#0f766e,stroke:#0f766e,color:#fff;
+    classDef io fill:#e6f2f0,stroke:#0f766e,color:#0f766e;
+    class G1,G2 gate;
+    class Q,V io;
+```
+
+Solid arrows are fixed graph edges and cost no model call. The two teal gates are
+the only places an LLM picks the next step; the dotted arrows are what they can
+send backwards. Triage has two more exits not drawn here — `clarify`, which asks
+the question back, and a live lookup for weather-type questions. The stack behind
+each box is listed under [Stack](#stack).
 
 ---
 
 ## How it works
 
-**Everything is validated once, at the edge.** Junk and direct prompt injection
-are refused, PII is masked, and the masked query is what actually runs. An
-uploaded PDF is extracted, chunked and embedded into Qdrant here too — the
-document becomes a retrieved source, not a longer prompt.
+Everything is validated once at the edge. Junk and direct prompt injection are
+refused, PII is masked, and the masked query is what actually runs. An uploaded
+PDF is extracted, chunked and embedded into Qdrant at the same point, so the
+document arrives as a retrieved source rather than a longer prompt.
 
-**Triage sizes the question before anything is spent.** One fast-model call sets
-the depth, and every downstream budget derives from it: how many plan tasks, how
-many ReAct iterations, how many sources, how long the report. It routes three
-ways. A question missing a parameter no search could supply is asked back. A
-question about live state is looked up. Everything else goes to the planner.
+Triage then sizes the question before anything is spent. One fast-model call sets
+the depth, and every downstream budget derives from it — plan tasks, ReAct
+iterations, sources read, report length. It routes three ways: a question missing
+a parameter that no search could supply is asked back, a question about live
+state is looked up from a data source, and everything else goes to the planner.
 
-**The researcher runs a real ReAct loop.** It emits a JSON decision each
-iteration — search, fetch, or stop — and a separate system executes it; the model
-has no tools of its own. Results are scored for relevance, thin snippets get
-scraped, and each task records whether it stopped because it was satisfied or
-because it hit the cap. That distinction is surfaced, because a loop where
-nothing self-terminates is the cap making every decision.
+The researcher is a real ReAct loop rather than a search-then-summarise call.
+Each iteration it emits a JSON decision (search, fetch, or stop) and a separate
+system executes it — the model has no tools of its own. Results are scored for
+relevance, thin snippets get scraped, and every task records whether it stopped
+because it was satisfied or because it hit the cap. That distinction is shown in
+the UI, because a loop where nothing self-terminates is really the cap making
+every decision.
 
-**Two gates are where a model actually decides.** Gate 1 asks whether the
-research is enough to write from. Gate 2 reads the critic's scores and picks the
-cheapest real fix: rewrite, re-research, re-plan, or finish. Routing backwards
-from a review to *research* is the thing a fixed pipeline cannot express.
+Two gates are the only places a model chooses the next step. Gate 1 asks whether
+the research is enough to write from. Gate 2 reads the critic's four scores and
+picks the cheapest fix that addresses the real problem: rewrite, re-research,
+re-plan, or finish. Routing backwards from a review to *research* is the move a
+fixed pipeline cannot express, and it is why the supervisor exists at all.
 
-**Every decision is recorded against what the rule expected.** The supervisor
-appends to `decision_log` — what it chose, what the documented invariant would
-have chosen, and whether a model was consulted at all. The trajectory evaluator
-scores that log afterwards, so the routing claim is checkable rather than
+Both gates log what they did against what the documented rule would have done.
+The supervisor appends to `decision_log` — the action it picked, the action the
+invariant expected, and whether a model was consulted at all — and the trajectory
+evaluator scores that log afterwards. The routing claim is checkable rather than
 asserted.
 
-**The citation audit is deterministic.** Because the scraped page text is kept,
-the report's own figures, dates and quotes are checked against the page they
-cite, with no model call. The caveat only appears when it is earned — an earlier
-version graded by word overlap, fired on almost every answer, and taught the
-reader to ignore it.
+The citation audit closes the loop. Because the scraped page text is kept in
+state, the report's own figures, dates and quotes are checked against the page
+they cite, with no model call. The caveat only appears when it is earned; an
+earlier version graded by word overlap, fired on almost every answer, and taught
+the reader to ignore it.
 
 ---
 
@@ -98,10 +121,10 @@ uv run python -m amaris.graph.pipeline --query "What is the MCP protocol?"
 Only `GROQ_API_KEY` is required. uv only, never pip — `pyproject.toml` and
 `uv.lock` are the source of truth.
 
-**Optional extras**, imported lazily so a missing one is a reduced run rather
+Optional extras are imported lazily, so a missing one gives a reduced run rather
 than a crash: `files` (PDF upload), `scraping` (Crawl4AI), `search` (Tavily),
-`export` (.docx), `observability` (LangSmith/Langfuse), `mcp`, `evaluation`
-(RAGAS).
+`export` (.docx), `observability` (LangSmith), `mcp`, and `evaluation`
+(RAGAS, offline benchmark only).
 
 ---
 
@@ -123,8 +146,10 @@ than a crash: `files` (PDF upload), `scraping` (Crawl4AI), `search` (Tavily),
 
 ## Deploy
 
-**Hugging Face Spaces.** The `Dockerfile` and the YAML block at the top of this
-README are the whole setup.
+### Hugging Face Spaces
+
+The `Dockerfile` and the YAML block at the top of this README are the whole
+setup.
 
 ```bash
 git remote add hf https://huggingface.co/spaces/<user>/<space>
@@ -137,9 +162,12 @@ in `DEPLOYMENT_MODE=cloud`, so Streamlit runs the graph in-process with no Redis
 or FastAPI. First build takes 10-15 minutes — Chromium and the embedding model
 are fetched at build time so the first visitor doesn't wait on them.
 
-**Streamlit Community Cloud.** Entrypoint `frontend/app.py`. Keep every secret at
-the root level of `secrets.toml`; Streamlit only promotes root-level entries to
-environment variables.
+### Streamlit Community Cloud
+
+Entrypoint `frontend/app.py`. Keep every secret at the root level of
+`secrets.toml`; Streamlit only promotes root-level entries to environment
+variables, so anything under a `[section]` header is invisible and the app boots
+with no provider configured.
 
 ---
 
@@ -153,7 +181,7 @@ environment variables.
 | Vectors & memory | Qdrant + fastembed (bge-small, ONNX — no torch) |
 | Documents | pypdf, pypdfium2, RapidOCR |
 | API & UI | FastAPI + WebSockets, Streamlit |
-| Observability | loguru → JSONL, LangSmith or Langfuse |
+| Observability | loguru → JSONL, LangSmith |
 | Safety | regex guardrails, PII masking, injection wrapping |
 | Tooling | uv, ruff, pytest |
 
@@ -169,16 +197,8 @@ uv run pytest
 uv run ruff check . && uv run ruff format --check .
 ```
 
-672 tests, 85% coverage, no network calls in the default suite. `integration`
-tests need Docker; `live_llm` tests are skipped by default.
-
 ---
 
-## Docs
-
-Architecture notes, agent prompts, memory boundaries and 46 ADRs live under
-`docs/` in the working tree. That directory is gitignored and is not published
-here.
 
 ## License
 

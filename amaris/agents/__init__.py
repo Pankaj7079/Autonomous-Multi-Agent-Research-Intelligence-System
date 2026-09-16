@@ -1,4 +1,4 @@
-"""Triage, the five research agents, and the supervisor """
+"""Triage, the five research agents, and the supervisor"""
 
 from __future__ import annotations
 

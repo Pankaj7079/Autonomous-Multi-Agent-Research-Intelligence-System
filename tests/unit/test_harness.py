@@ -89,6 +89,39 @@ def test_golden_checks_flag_a_missing_expected_agent() -> None:
     assert "critic" in check.detail
 
 
+def test_golden_checks_flag_an_agent_that_should_have_been_skipped() -> None:
+    """The direct/clarify/live point is that a whole run was avoided, not merely shortened."""
+    results = _golden_checks(
+        golden(forbidden_agents=["analyst"]),
+        finished_state(agents=["planner", "researcher", "analyst"]),
+    )
+    check = next(r for r in results if r.metric == "agents_skipped")
+    assert check.passed is False
+    assert "analyst" in check.detail
+
+
+def test_golden_checks_pass_when_the_forbidden_agent_stayed_out() -> None:
+    results = _golden_checks(
+        golden(forbidden_agents=["analyst"]), finished_state(agents=["planner", "researcher"])
+    )
+    check = next(r for r in results if r.metric == "agents_skipped")
+    assert check.passed is True
+
+
+def test_golden_checks_flag_a_wrongly_sized_run() -> None:
+    state = finished_state()
+    state["query_depth"] = "deep"
+    results = _golden_checks(golden(expected_depth=["direct"]), state)
+    check = next(r for r in results if r.metric == "depth_sized")
+    assert check.passed is False
+    assert "deep" in check.detail
+
+
+def test_depth_is_not_checked_when_the_golden_query_does_not_care() -> None:
+    results = _golden_checks(golden(expected_depth=[]), finished_state())
+    assert not [r for r in results if r.metric == "depth_sized"]
+
+
 def test_golden_checks_verify_revision_expectation() -> None:
     results = _golden_checks(golden(should_require_revision=True), finished_state(revisions=0))
     check = next(r for r in results if r.metric == "revision_expected")

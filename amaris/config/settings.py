@@ -57,9 +57,6 @@ class Settings(BaseSettings):
 
     langsmith_api_key: SecretStr | None = None
     langsmith_project: str = "amaris"
-    langfuse_public_key: SecretStr | None = None
-    langfuse_secret_key: SecretStr | None = None
-    langfuse_host: str = "http://localhost:3000"
 
     # the streamlit frontend calls this in local mode; cloud mode ignores it entirely
     api_base_url: str = "http://localhost:8000"

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +23,10 @@ class GoldenQuery:
     should_require_revision: bool
     notes: str
     reference_answer: str | None = None
+    # a set, not one value — triage is a model call and a question can size two ways defensibly
+    expected_depth: list[str] = field(default_factory=list)
+    # the real assertion for direct/clarify/live: "the analyst never ran", which presence cannot say
+    forbidden_agents: list[str] = field(default_factory=list)
 
 
 def load_golden_set(path: Path | str = DEFAULT_PATH) -> list[GoldenQuery]:
@@ -61,4 +65,6 @@ def _parse_entry(entry: dict[str, Any], path: Path) -> GoldenQuery:
         should_require_revision=bool(entry.get("should_require_revision", False)),
         notes=str(entry.get("notes", "")),
         reference_answer=entry.get("reference_answer"),
+        expected_depth=[str(d) for d in entry.get("expected_depth", [])],
+        forbidden_agents=[str(a) for a in entry.get("forbidden_agents", [])],
     )

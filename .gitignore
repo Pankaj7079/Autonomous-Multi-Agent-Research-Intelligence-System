@@ -36,11 +36,10 @@ qdrant_storage/
 .DS_Store
 Thumbs.db
 .idea/
-
 docs
-
 .claude
 CLAUDE
 
-# agent instructions — kept local, not published
 CLAUDE.md
+
+tests

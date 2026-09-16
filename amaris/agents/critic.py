@@ -15,7 +15,7 @@ from amaris.tools.relevance import select_for_prompt
 if TYPE_CHECKING:
     from amaris.graph.state import GraphState
 
-# answer_fit is the only dimension that can fail a report 
+# answer_fit is the only dimension that can fail a report
 DIMENSIONS = ("answer_fit", "faithfulness", "completeness", "coherence", "citation_quality")
 VALID_HINTS = (NEED_MORE_RESEARCH, FIX_WRITING, WRONG_TOPIC, APPROVE)
 REPORT_CHARS = 6000

@@ -1,6 +1,6 @@
-# Local dev services only. Cloud mode runs without any of this — 
+# Local dev services only. Cloud mode runs without any of this —
 #   docker compose up -d                      redis + qdrant
-#   docker compose --profile obs up -d        + langfuse tracing
+# Tracing needs no container: langsmith is hosted and reads LANGSMITH_* from .env (ADR-046)
 
 services:
   redis:
@@ -22,34 +22,5 @@ services:
     # readiness is checked by the app's /ready probe instead
     restart: unless-stopped
 
-  # optional — unlimited free traces, self-hosted
-  # v2, while the python sdk is v4 — self-hosting a matching v3+ server also needs
-  # clickhouse, redis and minio, so langfuse cloud is the supported path (ADR-043)
-  langfuse:
-    image: langfuse/langfuse:2
-    container_name: amaris-langfuse
-    profiles: ["obs"]
-    ports: ["3000:3000"]
-    environment:
-      DATABASE_URL: postgresql://langfuse:langfuse@langfuse-db:5432/langfuse
-      NEXTAUTH_SECRET: local-dev-secret
-      SALT: local-dev-salt
-      NEXTAUTH_URL: http://localhost:3000
-      TELEMETRY_ENABLED: "false"
-    depends_on: [langfuse-db]
-    restart: unless-stopped
-
-  langfuse-db:
-    image: postgres:16-alpine
-    container_name: amaris-langfuse-db
-    profiles: ["obs"]
-    environment:
-      POSTGRES_USER: langfuse
-      POSTGRES_PASSWORD: langfuse
-      POSTGRES_DB: langfuse
-    volumes: [langfuse_db:/var/lib/postgresql/data]
-    restart: unless-stopped
-
 volumes:
   qdrant_data:
-  langfuse_db:
