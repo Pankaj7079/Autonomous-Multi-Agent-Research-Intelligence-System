@@ -19,9 +19,9 @@ autonomy.
 | | |
 |---|---|
 | Graph nodes | 10 |
-| LLM-decided gates | 2 |
+| Routing gates | 2 — both call an LLM, only settle the route when state doesn't already |
 | Provider fallbacks | 4 (Groq → Gemini → GLM → Anthropic) |
-| Tests | 672, 85% coverage |
+| Tests | 706, 85% coverage |
 | Monthly cost | $0 |
 
 ---
@@ -52,11 +52,15 @@ flowchart TB
     class Q,V io;
 ```
 
-Solid arrows are fixed graph edges and cost no model call. The two teal gates are
-the only places an LLM picks the next step; the dotted arrows are what they can
-send backwards. Triage has two more exits not drawn here — `clarify`, which asks
-the question back, and a live lookup for weather-type questions. The stack behind
-each box is listed under [Stack](#stack).
+Solid arrows are fixed graph edges and cost no model call. The two teal gates
+are the only places routing is even in question; the dotted arrows are what
+they can send backwards. Both gates call an LLM every time — as a logged
+second opinion — but the call only *decides* the route when a hard rule (a
+revision cap, a step cap) hasn't already settled it; otherwise the rule wins
+regardless of what the model answers. Triage has two more exits not drawn
+here — `clarify`, which asks the question back, and a live lookup for
+weather-type questions. The stack behind each box is listed under
+[Stack](#stack).
 
 ---
 
@@ -81,17 +85,24 @@ because it was satisfied or because it hit the cap. That distinction is shown in
 the UI, because a loop where nothing self-terminates is really the cap making
 every decision.
 
-Two gates are the only places a model chooses the next step. Gate 1 asks whether
+Two gates are the only places routing is a real decision. Gate 1 asks whether
 the research is enough to write from. Gate 2 reads the critic's four scores and
 picks the cheapest fix that addresses the real problem: rewrite, re-research,
 re-plan, or finish. Routing backwards from a review to *research* is the move a
 fixed pipeline cannot express, and it is why the supervisor exists at all.
 
-Both gates log what they did against what the documented rule would have done.
-The supervisor appends to `decision_log` — the action it picked, the action the
-invariant expected, and whether a model was consulted at all — and the trajectory
-evaluator scores that log afterwards. The routing claim is checkable rather than
-asserted.
+An earlier version called an LLM at every hop to re-derive a decision state
+already settled — six calls a run, ~25 seconds, agreeing with the code-derivable
+answer 100% of the time. It was replaced, then Pankaj asked for the opposite
+trade-off: always call the model, so nothing about the routing logic ever runs
+unaudited. Both gates now call an LLM on every hop, but a hard rule (a revision
+cap, a step cap) still wins over what the model answers when one applies — the
+call becomes a logged second opinion instead of a decision. The supervisor
+appends to `decision_log` on every hop: the action it picked, the action the
+invariant expected, whether the model was called, and whether the model's
+answer actually decided the route or was only audited against it. The
+trajectory evaluator scores that log afterwards, so the routing claim is
+checkable rather than asserted.
 
 The citation audit closes the loop. Because the scraped page text is kept in
 state, the report's own figures, dates and quotes are checked against the page
@@ -140,6 +151,7 @@ than a crash: `files` (PDF upload), `scraping` (Crawl4AI), `search` (Tavily),
 | **Live data** | Weather-type questions are looked up from Open-Meteo, not researched |
 | **Export** | `.md`, `.json`, `.docx`, or email via Resend |
 | **MCP** | Exposes its own tools, and consumes arXiv and GitHub |
+| **Tool-call trace** | Every tool and MCP call a run made — which agent, what it targeted, ok/failed, duration — recorded per call site and rendered per run, not just logged |
 | **Inspector** | Six tabs per answer: execution, evidence, sources, evaluation, system, raw |
 
 ---
@@ -178,7 +190,7 @@ with no provider configured.
 | Orchestration | LangGraph + AsyncSqliteSaver |
 | Models | Groq `gpt-oss-120b` / `20b`, falling back to Gemini 3.6 Flash, GLM-4.5-Flash, Claude Sonnet 5 |
 | Search & scrape | ddgs, Tavily optional, Crawl4AI |
-| Vectors & memory | Qdrant + fastembed (bge-small, ONNX — no torch) |
+| Vectors & memory | Qdrant + fastembed (bge-small, ONNX — no torch), scoped to uploaded attachments only |
 | Documents | pypdf, pypdfium2, RapidOCR |
 | API & UI | FastAPI + WebSockets, Streamlit |
 | Observability | loguru → JSONL, LangSmith |
