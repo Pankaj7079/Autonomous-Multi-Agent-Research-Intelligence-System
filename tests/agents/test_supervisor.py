@@ -59,27 +59,35 @@ async def test_the_model_may_judge_thin_research_good_enough(
     assert await route(monkeypatch, at_research_gate(researched_state), "analyst") == "analyst"
 
 
-async def test_good_research_moves_on_without_a_model_call(
+async def test_good_research_moves_on_even_if_the_audit_call_disagrees(
     monkeypatch: pytest.MonkeyPatch, researched_state
 ) -> None:
-    """Quality above the floor with real sources leaves nothing to weigh, so nothing is spent."""
+    """Quality above the floor with real sources leaves nothing to weigh, so the route is not
+    spent on a decision — but the model is still asked for a second opinion, purely to audit
+    agreement, and a disagreeing answer must not change what happens (ADR-050)."""
     agent = SupervisorAgent()
     llm = patch_invoke(monkeypatch, agent, ScriptedLLM("researcher"))
 
     update = await agent.run(at_research_gate(researched_state))
+    entry = update["decision_log"][0]
     assert update["next_agent"] == "analyst"
-    assert llm.prompts == []
-    assert update["decision_log"][0]["llm_decided"] is False
+    assert len(llm.prompts) == 1
+    assert entry["llm_decided"] is False
+    assert entry["llm_called"] is True
+    assert entry["shadow_choice"] == "researcher"
+    assert entry["shadow_agreed"] is False
 
 
-async def test_no_sources_goes_back_to_research_without_a_model_call(
+async def test_no_sources_goes_back_to_research_even_if_the_audit_call_disagrees(
     monkeypatch: pytest.MonkeyPatch, state
 ) -> None:
     agent = SupervisorAgent()
     llm = patch_invoke(monkeypatch, agent, ScriptedLLM("analyst"))
 
-    assert (await agent.run(at_research_gate(state)))["next_agent"] == "researcher"
-    assert llm.prompts == []
+    update = await agent.run(at_research_gate(state))
+    assert update["next_agent"] == "researcher"
+    assert len(llm.prompts) == 1
+    assert update["decision_log"][0]["shadow_agreed"] is False
 
 
 async def test_a_shallow_query_skips_the_analyst_entirely(
@@ -90,17 +98,19 @@ async def test_a_shallow_query_skips_the_analyst_entirely(
     assert await route(monkeypatch, at_research_gate(researched_state), "analyst") == "writer"
 
 
-async def test_research_visits_are_capped(
+async def test_research_visits_are_capped_even_if_the_audit_call_disagrees(
     monkeypatch: pytest.MonkeyPatch, researched_state
 ) -> None:
-    """A gate that can always ask for more research is an unbounded bill."""
+    """A gate that can always ask for more research is an unbounded bill. The audit call still
+    fires (ADR-050), but a model that would keep researching cannot reopen the cap."""
     researched_state["research_quality"] = 0.1
     researched_state["agent_path"] = ["researcher"] * MAX_RESEARCH_VISITS
     agent = SupervisorAgent()
     llm = patch_invoke(monkeypatch, agent, ScriptedLLM("researcher"))
 
-    assert (await agent.run(researched_state))["next_agent"] == "analyst"
-    assert llm.prompts == []
+    update = await agent.run(researched_state)
+    assert update["next_agent"] == "analyst"
+    assert len(llm.prompts) == 1
 
 
 async def test_the_research_gate_shows_the_model_what_was_found(
@@ -121,17 +131,19 @@ async def test_the_research_gate_shows_the_model_what_was_found(
 # ── the review gate ───────────────────────────────────────────────────────
 
 
-async def test_an_approved_draft_finishes_without_a_model_call(
+async def test_an_approved_draft_finishes_even_if_the_audit_call_disagrees(
     monkeypatch: pytest.MonkeyPatch, drafted_state
 ) -> None:
-    """The critic approved and the score agrees — there is no decision left to pay for."""
+    """The critic approved and the score agrees — there is no decision left to weigh. The model
+    is still asked for the audit (ADR-050), but cannot reopen an already-settled approval."""
     drafted_state["routing_hint"] = APPROVE
     drafted_state["quality_score"] = 0.85
     agent = SupervisorAgent()
     llm = patch_invoke(monkeypatch, agent, ScriptedLLM("writer"))
 
-    assert (await agent.run(at_review_gate(drafted_state)))["next_agent"] == FINISH
-    assert llm.prompts == []
+    update = await agent.run(at_review_gate(drafted_state))
+    assert update["next_agent"] == FINISH
+    assert len(llm.prompts) == 1
 
 
 async def test_a_failing_draft_is_a_real_four_way_choice(
@@ -185,16 +197,22 @@ async def test_error_finishes_without_calling_the_llm(
     assert llm.prompts == []
 
 
-async def test_revision_cap_finishes_deterministically(
+async def test_revision_cap_finishes_even_if_the_model_wants_to_keep_revising(
     monkeypatch: pytest.MonkeyPatch, drafted_state
 ) -> None:
-    """An LLM must not be the only thing stopping an infinite revision loop."""
+    """An LLM must not be the only thing stopping an infinite revision loop. It is asked for a
+    second opinion anyway (ADR-050) — this proves that opinion cannot reopen the cap even when
+    it explicitly disagrees, which is the whole safety property this design depends on."""
     drafted_state["revision_count"] = 2
     agent = SupervisorAgent()
     llm = patch_invoke(monkeypatch, agent, ScriptedLLM("writer"))
 
-    assert (await agent.run(at_review_gate(drafted_state)))["next_agent"] == FINISH
-    assert llm.prompts == []
+    update = await agent.run(at_review_gate(drafted_state))
+    entry = update["decision_log"][0]
+    assert update["next_agent"] == FINISH
+    assert len(llm.prompts) == 1
+    assert entry["shadow_choice"] == "writer"
+    assert entry["shadow_agreed"] is False
 
 
 async def test_step_cap_finishes_even_if_the_llm_keeps_routing(
@@ -297,6 +315,24 @@ async def test_decision_log_marks_settled_steps_as_not_llm_decided(
     assert entry["llm_decided"] is False
     assert entry["to_agent"] == FINISH
     assert entry["matched_rule"] == "error_set"
+
+
+async def test_a_failed_audit_call_does_not_block_a_settled_decision(
+    monkeypatch: pytest.MonkeyPatch, researched_state
+) -> None:
+    """The audit call is a nice-to-have; a rate limit on it must not cost the actual run."""
+    agent = SupervisorAgent()
+
+    async def rate_limited(*args: object, **kwargs: object) -> str:
+        raise RuntimeError("rate limited")
+
+    monkeypatch.setattr(agent, "_invoke", rate_limited)
+
+    update = await agent.run(at_research_gate(researched_state))
+    entry = update["decision_log"][0]
+    assert update["next_agent"] == "analyst"
+    assert entry["shadow_choice"] is None
+    assert entry["shadow_error"] is not None
 
 
 async def test_decision_log_appends_rather_than_replaces(

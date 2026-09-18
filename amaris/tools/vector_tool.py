@@ -17,6 +17,10 @@ COLLECTION = "amaris_research"
 # sentence-transformers needed no migration. fastembed runs it on ONNX and pulls no torch.
 EMBED_MODEL = "BAAI/bge-small-en-v1.5"
 VECTOR_SIZE = 384
+# a blip should not cost an attachment, but a Qdrant that is actually down must not turn
+# into a much longer wait than the caller already budgets for — 3 tries, then give up (ADR-049)
+RETRY_ATTEMPTS = 3
+RETRY_DELAY_S = 0.4
 
 
 class VectorHit(TypedDict):
@@ -53,6 +57,25 @@ async def _embed_many(texts: list[str]) -> list[list[float]] | None:
 async def _embed(text: str) -> list[float] | None:
     vectors = await _embed_many([text])
     return vectors[0] if vectors else None
+
+
+async def _retry(operation: Any) -> Any:
+    """Run a Qdrant call, retrying transient failures up to RETRY_ATTEMPTS times.
+
+    A missing collection is a fact, not a blip — retrying a 404 cannot change it, and would
+    tax every query against a fresh Qdrant with 1.2s of pointless delay.
+    """
+    last: Exception | None = None
+    for attempt in range(RETRY_ATTEMPTS):
+        try:
+            return await operation()
+        except Exception as exc:
+            last = exc
+            if "doesn't exist" in str(exc) or "Not found" in str(exc):
+                raise
+            if attempt < RETRY_ATTEMPTS - 1:
+                await asyncio.sleep(RETRY_DELAY_S * (attempt + 1))
+    raise last  # type: ignore[misc]
 
 
 def _client() -> Any | None:
@@ -96,11 +119,13 @@ async def ensure_collection(collection: str = COLLECTION) -> bool:
     try:
         from qdrant_client.models import Distance, VectorParams
 
-        existing = await client.get_collections()
+        existing = await _retry(client.get_collections)
         if collection not in {c.name for c in existing.collections}:
-            await client.create_collection(
-                collection_name=collection,
-                vectors_config=VectorParams(size=VECTOR_SIZE, distance=Distance.COSINE),
+            await _retry(
+                lambda: client.create_collection(
+                    collection_name=collection,
+                    vectors_config=VectorParams(size=VECTOR_SIZE, distance=Distance.COSINE),
+                )
             )
             logger.bind(collection=collection).info("vector.collection_created")
         return True
@@ -137,8 +162,8 @@ async def upsert_documents(
             PointStruct(
                 id=str(uuid.uuid4()),
                 vector=vector,
-                # extra keys ride along: episodic memory tags points with kind and created_at,
-                # and dropping them here would lose that silently
+                # extra keys ride along: attachments tag points with kind and created_ts for
+                # purge_stale_attachments, and dropping them here would lose that silently
                 payload={
                     **doc,
                     "text": doc.get("text", ""),
@@ -149,7 +174,7 @@ async def upsert_documents(
             )
             for doc, vector in zip(documents, vectors, strict=True)
         ]
-        await client.upsert(collection_name=collection, points=points)
+        await _retry(lambda: client.upsert(collection_name=collection, points=points))
         logger.bind(tool="vector", stored=len(points), session_id=session_id).debug("tool.call")
         return len(points)
     except Exception as exc:
@@ -197,12 +222,14 @@ async def search_knowledge_base(
                 conditions.append(FieldCondition(key="url", match=MatchAny(any=list(urls))))
             query_filter = Filter(must=conditions)
 
-        response = await client.query_points(
-            collection_name=collection,
-            query=vector,
-            limit=limit,
-            with_payload=True,
-            query_filter=query_filter,
+        response = await _retry(
+            lambda: client.query_points(
+                collection_name=collection,
+                query=vector,
+                limit=limit,
+                with_payload=True,
+                query_filter=query_filter,
+            )
         )
         hits = [
             VectorHit(
@@ -266,10 +293,12 @@ async def delete_documents(
         selector = Filter(must=must)
 
         # counted before deleting: qdrant does not report how many points a filter removed
-        before = await client.count(collection_name=collection, count_filter=selector, exact=True)
+        before = await _retry(
+            lambda: client.count(collection_name=collection, count_filter=selector, exact=True)
+        )
         if not before.count:
             return 0
-        await client.delete(collection_name=collection, points_selector=selector)
+        await _retry(lambda: client.delete(collection_name=collection, points_selector=selector))
     except Exception as exc:
         logger.bind(tool="vector", error=str(exc)[:200]).warning("tool.failed")
         return 0
@@ -305,10 +334,12 @@ async def purge_stale_attachments(max_age_hours: float, collection: str = COLLEC
                 FieldCondition(key="created_ts", range=Range(lt=cutoff)),
             ]
         )
-        before = await client.count(collection_name=collection, count_filter=selector, exact=True)
+        before = await _retry(
+            lambda: client.count(collection_name=collection, count_filter=selector, exact=True)
+        )
         if not before.count:
             return 0
-        await client.delete(collection_name=collection, points_selector=selector)
+        await _retry(lambda: client.delete(collection_name=collection, points_selector=selector))
     except Exception as exc:
         logger.bind(tool="vector", error=str(exc)[:200]).warning("tool.failed")
         return 0

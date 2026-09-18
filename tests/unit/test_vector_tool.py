@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from amaris.tools import vector_tool
-from amaris.tools.vector_tool import search_knowledge_base, upsert_documents
+from amaris.tools.vector_tool import _retry, search_knowledge_base, upsert_documents
 
 
 @pytest.fixture(autouse=True)
@@ -190,3 +190,81 @@ async def test_a_collection_that_does_not_exist_yet_is_empty_not_broken(
     monkeypatch.setattr(vector_tool, "_client", Client)
 
     assert await search_knowledge_base("anything") == []
+
+
+# ── retry: a blip is survivable, a dead Qdrant is not retried forever ────────
+
+
+async def test_a_blip_recovers_on_the_second_try(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(vector_tool, "RETRY_DELAY_S", 0.0)
+    calls = {"n": 0}
+
+    async def flaky() -> str:
+        calls["n"] += 1
+        if calls["n"] < 2:
+            raise ConnectionError("temporary")
+        return "ok"
+
+    assert await _retry(flaky) == "ok"
+    assert calls["n"] == 2
+
+
+async def test_a_dead_qdrant_gives_up_after_three_tries(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(vector_tool, "RETRY_DELAY_S", 0.0)
+    calls = {"n": 0}
+
+    async def always_down() -> None:
+        calls["n"] += 1
+        raise ConnectionError("all connection attempts failed")
+
+    with pytest.raises(ConnectionError):
+        await _retry(always_down)
+    assert calls["n"] == vector_tool.RETRY_ATTEMPTS
+
+
+async def test_a_missing_collection_is_not_retried() -> None:
+    """A 404 is a fact, not a blip — retrying it only adds delay to a fresh Qdrant."""
+    calls = {"n": 0}
+
+    async def not_found() -> None:
+        calls["n"] += 1
+        raise RuntimeError("Unexpected Response: 404 Collection `x` doesn't exist!")
+
+    with pytest.raises(RuntimeError):
+        await _retry(not_found)
+    assert calls["n"] == 1
+
+
+async def test_search_retries_before_giving_up(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The behaviour that matters end to end: one blip during a real search still answers."""
+    monkeypatch.setattr(vector_tool, "RETRY_DELAY_S", 0.0)
+    calls = {"n": 0}
+
+    class FakePoint:
+        def __init__(self) -> None:
+            self.payload = {"text": "found it", "url": "https://a.com", "title": "t"}
+            self.score = 0.9
+
+    class FakeResponse:
+        def __init__(self) -> None:
+            self.points = [FakePoint()]
+
+    class FlakyClient:
+        async def query_points(self, **kwargs: object) -> FakeResponse:
+            calls["n"] += 1
+            if calls["n"] < 2:
+                raise ConnectionError("temporary")
+            return FakeResponse()
+
+        async def close(self) -> None:
+            return None
+
+    async def fake_embed(text: str) -> list[float]:
+        return [0.1] * vector_tool.VECTOR_SIZE
+
+    monkeypatch.setattr(vector_tool, "_embed", fake_embed)
+    monkeypatch.setattr(vector_tool, "_client", FlakyClient)
+
+    hits = await search_knowledge_base("anything")
+    assert hits and hits[0]["text"] == "found it"
+    assert calls["n"] == 2

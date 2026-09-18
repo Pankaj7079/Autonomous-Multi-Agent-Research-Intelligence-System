@@ -81,6 +81,17 @@ Decide three things.
    a local question with no place, a comparison with only one side, "now" where
    there is no way to know when now is.
 
+   A timeframe already stated — "today", "now", "this week", an actual date — is
+   enough. Never ask which day or time is meant when one of those words is already
+   in the question; that round trip answers nothing the question didn't already say.
+
+   Day-to-day status — flood levels, traffic, prices, a score, an event's outcome —
+   is answerable through search even though it changes daily. Only a literal
+   instrument reading such as temperature needs a live data source instead of
+   search, and that case never reaches this prompt — it is resolved before triage
+   runs. Do not decline a question for being "real-time" unless nothing at all
+   could be searched for it.
+
    A named thing is always answerable. If the question names something — a protocol,
    a library, a person, a product, an event — then searching for that name is the
    job, even when the name is ambiguous or you do not recognise it. Research it and

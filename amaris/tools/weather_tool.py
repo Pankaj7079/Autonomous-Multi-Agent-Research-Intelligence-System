@@ -240,6 +240,11 @@ _NOISE_WORDS = frozenset(
         "give",
         "please",
         "plz",
+        "can",
+        "could",
+        "would",
+        "should",
+        "you",
         "weather",
         "temperature",
         "forecast",
@@ -276,7 +281,11 @@ _NOISE_WORDS = frozenset(
 )
 # anything that is not part of a place name, so "delhi?" and "new-york" both survive
 _NOT_NAME = re.compile("[^A-Za-z0-9' -]+")
-_MAX_WORDS = 9
+# generous enough for real phrasing ("can you please tell me the weather in X today") while a
+# compound question mixing weather with something else usually runs longer than this and falls
+# through to triage instead — where a wrong guess here is cheap anyway (the geocoder returns
+# nothing and the run falls back to research), this is a length past which it stops being cheap
+_MAX_WORDS = 12
 
 
 def place_for_weather_query(query: str) -> str:

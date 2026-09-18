@@ -23,6 +23,7 @@ def entry(
     to_agent: str,
     *,
     llm_decided: bool = True,
+    llm_called: bool | None = None,
     expected_agent: str | None = None,
     matched_rule: str = "some_rule",
     gate: str = "research_gate",
@@ -35,12 +36,17 @@ def entry(
     plan_exists: bool = True,
     routing_hint: str = "none",
     error: str = "none",
+    shadow_choice: str | None = None,
+    shadow_agreed: bool | None = None,
+    shadow_error: str | None = None,
 ) -> dict:
     return {
         "step": step,
         "from_agent": from_agent,
         "to_agent": to_agent,
         "llm_decided": llm_decided,
+        # mirrors supervisor._decide's own default: undecided means the audit call still ran
+        "llm_called": llm_decided if llm_called is None else llm_called,
         "expected_agent": expected_agent if expected_agent is not None else to_agent,
         "matched_rule": matched_rule,
         "gate": gate,
@@ -54,6 +60,9 @@ def entry(
         "revision_count": revision_count,
         "routing_hint": routing_hint,
         "error": error,
+        "shadow_choice": shadow_choice,
+        "shadow_agreed": shadow_agreed,
+        "shadow_error": shadow_error,
     }
 
 
@@ -121,16 +130,93 @@ async def test_agreement_ignores_decisions_no_model_made() -> None:
     assert "no model call was needed" in routing.detail
 
 
-async def test_economy_measures_how_many_hops_cost_nothing() -> None:
-    """The headline claim after the rewrite: spend tracks uncertainty, not step count."""
+async def test_economy_measures_how_many_hops_made_no_model_call_at_all() -> None:
+    """Keyed on llm_called, not llm_decided: a settled decision still pays for an audit call
+    it cannot act on (ADR-050), so only a decision that skips the audit entirely — error_set —
+    is genuinely free."""
     state = new_state("q")
     state["decision_log"] = [
-        entry(1, RESEARCHER, ANALYST, llm_decided=False, matched_rule="settled_quality_met"),
-        entry(2, "critic", WRITER, llm_decided=True, gate="review_gate"),
+        entry(1, WRITER, FINISH, llm_decided=False, llm_called=False, matched_rule="error_set"),
+        entry(
+            2,
+            "critic",
+            WRITER,
+            llm_decided=False,
+            llm_called=True,
+            matched_rule="settled_quality_met",
+            gate="review_gate",
+        ),
     ]
     results = await TrajectoryEvaluator().evaluate(state)
     economy = next(r for r in results if r.metric == "routing_economy")
     assert economy.score == 0.5
+    assert "1/2" in economy.detail
+
+
+# ── shadow_agreement: the audit ADR-050 pays for ─────────────────────────────
+
+
+async def test_shadow_agreement_scores_how_often_the_audit_call_agreed() -> None:
+    state = new_state("q")
+    state["decision_log"] = [
+        entry(
+            1,
+            RESEARCHER,
+            ANALYST,
+            llm_decided=False,
+            llm_called=True,
+            matched_rule="settled_quality_met",
+            shadow_choice=ANALYST,
+            shadow_agreed=True,
+        ),
+        entry(
+            2,
+            "critic",
+            FINISH,
+            llm_decided=False,
+            llm_called=True,
+            matched_rule="revision_cap",
+            gate="review_gate",
+            shadow_choice=WRITER,
+            shadow_agreed=False,
+        ),
+    ]
+    results = await TrajectoryEvaluator().evaluate(state)
+    shadow = next(r for r in results if r.metric == "shadow_agreement")
+    assert shadow.score == 0.5
+    assert "1/2" in shadow.detail
+
+
+async def test_shadow_agreement_is_perfect_when_nothing_was_settled_to_audit() -> None:
+    """Only genuine judgement calls ran — there is no settled decision to have a second
+    opinion on, so this must read as trivially satisfied, not as a missing metric."""
+    state = new_state("q")
+    state["decision_log"] = [entry(1, RESEARCHER, ANALYST, llm_decided=True)]
+    results = await TrajectoryEvaluator().evaluate(state)
+    shadow = next(r for r in results if r.metric == "shadow_agreement")
+    assert shadow.score == 1.0
+    assert "no settled decision was audited" in shadow.detail
+
+
+async def test_shadow_agreement_reports_when_every_audit_call_failed() -> None:
+    """A rate limit on the audit call must show up as a fact, not silently score as agreement."""
+    state = new_state("q")
+    state["decision_log"] = [
+        entry(
+            1,
+            RESEARCHER,
+            ANALYST,
+            llm_decided=False,
+            llm_called=True,
+            matched_rule="settled_quality_met",
+            shadow_choice=None,
+            shadow_error="rate limited",
+        ),
+    ]
+    results = await TrajectoryEvaluator().evaluate(state)
+    shadow = next(r for r in results if r.metric == "shadow_agreement")
+    assert shadow.score == 0.0
+    assert "every audit call failed" in shadow.detail
 
 
 async def test_no_decision_log_returns_a_zero_result_not_a_crash() -> None:

@@ -42,16 +42,11 @@ def _no_network(monkeypatch: pytest.MonkeyPatch) -> None:
     async def no_scrape(url: str, **kwargs: Any) -> str:
         return ""
 
-    async def no_recall(query: str, limit: int = 3) -> list[str]:
-        return []
-
-    async def no_store(query: str, finding: str, url: str = "") -> bool:
-        return False
-
     monkeypatch.setattr(researcher_module, "smart_search", fake_search)
     monkeypatch.setattr(researcher_module, "scrape_url", no_scrape)
-    monkeypatch.setattr(researcher_module, "recall_related", no_recall)
-    monkeypatch.setattr(researcher_module, "add_research_finding", no_store)
+    # _mcp_sources imports this lazily from its source module, not from researcher_module —
+    # without this, a dev whose own .env has MCP_CLIENT_ENABLED=true hits the real network here
+    monkeypatch.setattr("amaris.tools.mcp_client.configured_servers", lambda: [])
 
 
 async def test_loop_stops_when_the_agent_says_sufficient(

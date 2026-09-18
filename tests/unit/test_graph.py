@@ -161,11 +161,6 @@ async def test_the_evaluator_spends_no_model_call_on_a_finished_report(monkeypat
     the per-request signal is a citation audit that cannot rate-limit because it is pure."""
     from amaris.graph import nodes
 
-    async def no_memory(*args, **kwargs):
-        return None
-
-    monkeypatch.setattr(nodes, "add_session_summary", no_memory)
-
     state = new_state("what is mango?")
     state["draft_report"] = "India grew 24.7 million tonnes of mango in 2023 [1]."
     state["citations"] = [{"index": 1, "url": "https://a.com", "title": "Mango"}]
@@ -187,11 +182,6 @@ async def test_a_claim_whose_page_does_not_back_it_is_named_not_averaged(monkeyp
     """The reason RAGAS went: one faithfulness number averages away the claim that is wrong.
     A report can score 0.94 as a whole and 0.61 per claim."""
     from amaris.graph import nodes
-
-    async def no_memory(*args, **kwargs):
-        return None
-
-    monkeypatch.setattr(nodes, "add_session_summary", no_memory)
 
     state = new_state("what is mango?")
     state["draft_report"] = "The fruit can weigh 2.5 kg [1]. It cures diabetes in 92% of cases [2]."

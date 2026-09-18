@@ -2,8 +2,12 @@
 
 Forced hops are graph edges now. This agent is asked only the two questions state cannot
 answer on its own: is the research good enough to write from, and what does a reviewed draft
-need next. Even at those gates it short-circuits without a model call when the answer is
-already determined, so LLM spend tracks real uncertainty rather than step count.
+need next. Code decides first whenever state already settles the answer — a hard cap, or both
+signals agreeing there is nothing left to weigh — and a model is still asked for a second
+opinion on every one of those settled calls, purely to audit agreement. It is never allowed to
+override one: a cap that only holds when a rate-limited or malformed model call does not fire
+is not a cap (ADR-050). The only place a model's own answer becomes the route is the genuinely
+undetermined middle ground where no rule applies at all.
 """
 
 from __future__ import annotations
@@ -247,11 +251,20 @@ class SupervisorAgent(BaseAgent):
         gate: str,
         to_agent: str,
         llm_decided: bool,
+        llm_called: bool,
         snapshot: dict[str, Any],
         matched_rule: str,
         expected_agent: str,
+        shadow_choice: str | None,
+        shadow_agreed: bool | None,
+        shadow_error: str | None,
     ) -> dict[str, Any]:
-        """One decision_log entry — the only input trajectory_eval.py's Layer 3 needs."""
+        """One decision_log entry — the only input trajectory_eval.py's Layer 3 needs.
+
+        llm_decided is whether the model's answer chose the route. llm_called is whether a
+        model was asked at all — the two differ now that a settled decision still asks for a
+        second opinion it is not allowed to act on (ADR-050).
+        """
         return {
             "step": len(state["decision_log"]) + 1,
             "timestamp": datetime.now(UTC).isoformat(timespec="seconds"),
@@ -259,11 +272,15 @@ class SupervisorAgent(BaseAgent):
             "to_agent": to_agent,
             "gate": gate,
             "llm_decided": llm_decided,
+            "llm_called": llm_called,
             "expected_agent": expected_agent,
             "matched_rule": matched_rule,
+            "shadow_choice": shadow_choice,
+            "shadow_agreed": shadow_agreed,
+            "shadow_error": shadow_error,
             "reasoning": (
                 f"{gate}: chose {to_agent}"
-                + ("" if llm_decided else f" without a model call ({matched_rule})")
+                + ("" if llm_decided else f" without letting the model decide ({matched_rule})")
             ),
             **snapshot,
         }
@@ -290,21 +307,23 @@ class SupervisorAgent(BaseAgent):
         gate = self._gate(state)
 
         if state.get("error"):
+            # not a routing question — there is exactly one sane answer, so no audit call
+            # either; asking a model "what now" about a caught exception buys nothing (ADR-050)
             return self._decide(state, gate, snapshot, FINISH, "error_set", llm_decided=False)
 
         settled = self._settled(state, gate, snapshot)
         # a run that cleared the floor is approved even when it also hit the revision cap —
         # checking the cap first labelled a passing 0.78 run as having given up
         if settled and settled[0] == FINISH:
-            return self._decide(state, gate, snapshot, FINISH, settled[1], llm_decided=False)
+            return await self._decide_settled(state, gate, snapshot, FINISH, settled[1])
 
         reason = self._terminal_reason(state)
         if reason:
-            return self._decide(state, gate, snapshot, FINISH, reason, llm_decided=False)
+            return await self._decide_settled(state, gate, snapshot, FINISH, reason)
 
         if settled:
             chosen, rule = settled
-            return self._decide(state, gate, snapshot, chosen, rule, llm_decided=False)
+            return await self._decide_settled(state, gate, snapshot, chosen, rule)
 
         raw = await self._invoke(self._build_prompt(state, gate, snapshot))
         chosen = self._match(raw, gate)
@@ -322,6 +341,41 @@ class SupervisorAgent(BaseAgent):
             raw=raw,
         )
 
+    async def _decide_settled(
+        self, state: GraphState, gate: str, snapshot: dict[str, Any], chosen: str, rule: str
+    ) -> dict[str, Any]:
+        """Code already has the answer; ask the model anyway and log whether it agrees.
+
+        The model's answer is recorded for audit, never routed on — a hard cap or a settled
+        read of state must not depend on a rate-limited or malformed model call (ADR-050).
+        """
+        shadow_choice, shadow_error = await self._shadow(state, gate, snapshot)
+        return self._decide(
+            state,
+            gate,
+            snapshot,
+            chosen,
+            rule,
+            llm_decided=False,
+            llm_called=True,
+            shadow_choice=shadow_choice,
+            shadow_error=shadow_error,
+        )
+
+    async def _shadow(
+        self, state: GraphState, gate: str, snapshot: dict[str, Any]
+    ) -> tuple[str | None, str | None]:
+        """What the model would have chosen, for comparison only. Never raises."""
+        try:
+            raw = await self._invoke(self._build_prompt(state, gate, snapshot))
+        except Exception as exc:
+            logger.bind(gate=gate, error=str(exc)[:150]).warning("supervisor.shadow_failed")
+            return None, str(exc)[:200]
+        chosen = self._match(raw, gate)
+        if chosen == ANALYST:
+            chosen = self._proceed_target(state)
+        return chosen, None
+
     def _decide(
         self,
         state: GraphState,
@@ -331,25 +385,37 @@ class SupervisorAgent(BaseAgent):
         rule: str,
         *,
         llm_decided: bool,
+        llm_called: bool | None = None,
         expected_agent: str | None = None,
+        shadow_choice: str | None = None,
+        shadow_error: str | None = None,
         raw: str = "",
     ) -> dict[str, Any]:
         """Build the state update for one routing decision, logged the same way either way."""
+        called = llm_decided if llm_called is None else llm_called
+        shadow_agreed = (shadow_choice == chosen) if shadow_choice else None
         entry = self._log_decision(
             state,
             gate=gate,
             to_agent=chosen,
             llm_decided=llm_decided,
+            llm_called=called,
             snapshot=snapshot,
             matched_rule=rule,
             expected_agent=expected_agent or chosen,
+            shadow_choice=shadow_choice,
+            shadow_agreed=shadow_agreed,
+            shadow_error=shadow_error,
         )
         logger.bind(
             gate=gate,
             next_agent=chosen,
             llm_decided=llm_decided,
+            llm_called=called,
             rule=rule,
             expected=expected_agent if expected_agent and expected_agent != chosen else None,
+            shadow=shadow_choice,
+            shadow_agreed=shadow_agreed,
             quality=snapshot["research_quality"],
             score=snapshot["quality_score"],
             hint=snapshot["routing_hint"],

@@ -140,6 +140,21 @@
   should_require_revision: false
   notes: "three entities to connect correctly, tests whether the writer keeps them distinct"
 
+- id: m4
+  query: "tell me today patna weather and what about flood condition in patna ,plz tell me"
+  category: multi_hop
+  expected_depth: [direct, brief]
+  expected_min_sources: 1
+  expected_agents_involved: [triage, planner, researcher, writer, critic]
+  forbidden_agents: [clarify, live]
+  should_require_revision: false
+  notes: "a real reported failure: too long for the deterministic live-weather path (which is
+    correct — it mixes weather with flood status, a second topic), so it fell to triage's own
+    LLM answerability check, which asked back for a date despite 'today' already being in the
+    question. Fixed by telling the prompt explicitly that a stated timeframe is enough and that
+    day-to-day status like flood levels is searchable even though it changes daily — this must
+    never clarify again"
+
 # ── recent_events — does it actually search, or recite something stale it was trained on. ──
 
 - id: r1

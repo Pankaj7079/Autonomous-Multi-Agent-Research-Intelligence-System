@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from amaris.config.settings import get_settings
+from amaris.config.settings import Settings, get_settings
 from amaris.tools import mcp_client
 from amaris.tools.mcp_client import ServerSpec, configured_servers, search
 
@@ -14,8 +14,12 @@ ARXIV = ServerSpec(
 
 
 @pytest.fixture(autouse=True)
-def _clear_settings():
+def _clear_settings(monkeypatch: pytest.MonkeyPatch):
     get_settings.cache_clear()
+    # _env_file=None: a developer's own .env (this one has MCP_CLIENT_ENABLED=true) must never
+    # leak into a test asserting what happens with nothing configured — deleting the env var
+    # alone is not enough, since pydantic-settings falls back to the .env file underneath it
+    monkeypatch.setattr(mcp_client, "get_settings", lambda: Settings(_env_file=None))
     yield
     get_settings.cache_clear()
 

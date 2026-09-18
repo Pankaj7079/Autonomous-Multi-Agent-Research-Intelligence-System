@@ -32,6 +32,7 @@ READING = Weather(
         ("what is the weather in Delhi today", "Delhi"),
         ("temperature in patna right now", "patna"),
         ("New York weather tonight", "New York"),
+        ("can you please tell me the weather in Darbhanga today", "Darbhanga"),
     ],
 )
 def test_a_question_about_conditions_right_now_yields_its_place(query: str, place: str) -> None:
@@ -46,11 +47,17 @@ def test_a_question_about_conditions_right_now_yields_its_place(query: str, plac
         "average rainfall in Kerala",
         "what is prompt caching and when does it pay off?",
         "compare the weather models used by ECMWF and NOAA",
+        # a real report: asked back for a date "today" already answered, because this compound
+        # question was long enough to reach the LLM triage path with a stale prompt (fixed in
+        # triage.py's PROMPT) rather than because place_for_weather_query mis-detected it — this
+        # locks in that raising _MAX_WORDS must never make it start guessing a place here instead
+        "tell me today patna weather and what about flood condition in patna plz tell me",
         "",
     ],
 )
 def test_a_research_question_is_left_to_the_research_path(query: str) -> None:
-    """A question that explains, compares or looks back is research even when it says "weather"."""
+    """A question that explains, compares, looks back, or mixes in another topic entirely is
+    research even when it says "weather"."""
     assert place_for_weather_query(query) == ""
 
 

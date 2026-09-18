@@ -428,11 +428,25 @@ def _decision_row(entry: dict[str, Any]) -> str:
     expected = str(entry.get("expected_agent", "?"))
     source = "LLM" if entry.get("llm_decided") else "rule"
     flag = ' <span class="diverged">diverged</span>' if chosen != expected else ""
+
+    # a settled decision still asks the model for a second opinion it cannot act on (ADR-050) —
+    # shown here so the audit is visible per-decision, not just as a suite-wide average
+    audit = ""
+    if entry.get("llm_called") and not entry.get("llm_decided"):
+        if entry.get("shadow_error"):
+            audit = ' <span class="diverged">audit call failed</span>'
+        elif entry.get("shadow_choice"):
+            agree_cls = "" if entry.get("shadow_agreed") else ' class="diverged"'
+            verb = "agreed" if entry.get("shadow_agreed") else "would have chosen"
+            audit = (
+                f" <span{agree_cls}>model {verb} {html.escape(str(entry['shadow_choice']))}</span>"
+            )
+
     return (
         f"<tr><td>{entry.get('step', '?')}</td>"
         f"<td>{html.escape(str(entry.get('from_agent', '?')))} &rarr; "
         f"<b>{html.escape(chosen)}</b>{flag}</td>"
-        f"<td>{source}</td>"
+        f"<td>{source}{audit}</td>"
         f"<td><code>{html.escape(str(entry.get('matched_rule', '?')))}</code></td>"
         f"<td>{float(entry.get('research_quality', 0.0)):.2f}</td>"
         f"<td>{float(entry.get('quality_score', 0.0)):.2f}</td></tr>"
@@ -444,16 +458,24 @@ def decision_trace(trace: RunTrace | None) -> None:
     if trace is None or not trace.decisions:
         return
     diverged = sum(1 for d in trace.decisions if d.get("to_agent") != d.get("expected_agent"))
-    settled = sum(1 for d in trace.decisions if not d.get("llm_decided"))
+    free = sum(1 for d in trace.decisions if not d.get("llm_called"))
+    audited = [d for d in trace.decisions if d.get("llm_called") and not d.get("llm_decided")]
+    agreed = sum(1 for d in audited if d.get("shadow_agreed"))
     label("routing decisions", f"{len(trace.decisions)}")
     describe(
-        f"{settled} of {len(trace.decisions)} were settled by state and cost no model call; "
-        "the rest were genuine judgement calls at one of the two gates. "
+        f"{free} of {len(trace.decisions)} needed no model call at all. "
         + (
-            f"{diverged} diverged from the naive reading of the state — that is the system "
-            "reasoning, not a bug."
+            f"{len(audited)} were settled by state but the model was still asked for a second "
+            f"opinion, purely to audit — it agreed on {agreed} of {len(audited)} and could not "
+            "have overruled the rest either way (ADR-050). "
+            if audited
+            else ""
+        )
+        + (
+            f"{diverged} genuine judgement call(s) diverged from the naive reading of state — "
+            "that is the system reasoning, not a bug."
             if diverged
-            else "None diverged from the naive reading of the state on this run."
+            else "No genuine judgement call diverged from the naive reading of state on this run."
         )
     )
     st.markdown(

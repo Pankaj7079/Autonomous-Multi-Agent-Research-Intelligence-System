@@ -17,7 +17,6 @@ from amaris.agents import (
 
 # GraphState must exist at runtime: langgraph resolves node annotations when compiling
 from amaris.graph.state import FINISH, GraphState
-from amaris.memory.episodic import add_session_summary
 from amaris.observability.context import agent_context
 from amaris.observability.logging import logger
 from amaris.observability.tool_trace import drain, start_recording
@@ -203,7 +202,7 @@ def _audit(state: GraphState) -> dict[str, Any]:
 
 
 async def evaluator_node(state: GraphState) -> dict[str, Any]:
-    """Terminal node: promotes the draft to final, audits its citations, records the session.
+    """Terminal node: promotes the draft to final and audits its citations.
 
     No judge runs here any more. RAGAS scores the golden set offline in `evaluation/harness.py`,
     which is what a benchmark is for; per question it spent ~40s on four numbers the reader
@@ -219,11 +218,6 @@ async def evaluator_node(state: GraphState) -> dict[str, Any]:
     state = {**state, "final_report": report}
 
     audit = _audit(state)
-
-    try:
-        await add_session_summary(state["original_query"], report, {})
-    except Exception as exc:
-        logger.bind(error=str(exc)[:150]).warning("evaluator.memory_failed")
 
     logger.bind(
         chars=len(report),

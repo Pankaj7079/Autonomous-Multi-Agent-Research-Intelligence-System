@@ -6,9 +6,11 @@ from typing import Any
 
 import pytest
 
+from amaris.agents.supervisor import SupervisorAgent
 from amaris.graph import nodes as nodes_module
 from amaris.graph.pipeline import build_graph
 from amaris.graph.state import APPROVE, NEED_MORE_RESEARCH, new_state
+from tests.helpers import ScriptedLLM, patch_invoke
 
 
 def stub(name: str, update: dict[str, Any]):
@@ -59,11 +61,10 @@ def wire(monkeypatch: pytest.MonkeyPatch, depth: str, critic_update: dict[str, A
     )
     monkeypatch.setattr(nodes_module, "CriticAgent", stub("critic", critic_update))
 
-    async def no_memory(*args: Any, **kwargs: Any) -> None:
-        return None
-
-    # no judge to stub out any more — the evaluator's citation audit is pure and free (ADR-039)
-    monkeypatch.setattr(nodes_module, "add_session_summary", no_memory)
+    # SupervisorAgent itself is real here — that is the point of this suite — but every settled
+    # decision now also asks the model for an audit opinion it cannot act on (ADR-050). Scripted
+    # so this test proves the graph's real routing without spending a real network call on it.
+    patch_invoke(monkeypatch, SupervisorAgent(), ScriptedLLM("researcher"))
 
 
 APPROVED = {

@@ -1,1 +1,1 @@
-"""Redis job state and Qdrant episodic memory. Phase 3 — see docs/MEMORY.md."""
+"""Redis for working memory, Qdrant for semantic memory over attachments. See docs/MEMORY.md."""

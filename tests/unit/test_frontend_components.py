@@ -316,6 +316,7 @@ def test_a_divergence_from_the_documented_rule_is_flagged(fake: FakeStreamlit) -
                 "expected_agent": "writer",
                 "matched_rule": "fix_writing",
                 "llm_decided": True,
+                "llm_called": True,
                 "research_quality": 0.5,
                 "quality_score": 0.6,
             }
@@ -324,8 +325,56 @@ def test_a_divergence_from_the_documented_rule_is_flagged(fake: FakeStreamlit) -
     components.decision_trace(trace)
     drawn = fake.drawn
     assert "diverged" in drawn
-    assert "1 diverged" in drawn, "the heading must say so, not only the row"
-    assert "0 of 1 were settled by state" in drawn
+    assert "1 genuine judgement call" in drawn, "the heading must say so, not only the row"
+    assert "0 of 1 needed no model call at all" in drawn
+
+
+def test_a_settled_decision_shows_whether_the_audit_call_agreed(fake: FakeStreamlit) -> None:
+    """The whole point of ADR-050: a settled decision still shows the model's own opinion,
+    even though that opinion never had the power to change what happened."""
+    trace = _trace(
+        decisions=[
+            {
+                "step": 1,
+                "from_agent": "researcher",
+                "to_agent": "analyst",
+                "expected_agent": "analyst",
+                "matched_rule": "settled_quality_met",
+                "llm_decided": False,
+                "llm_called": True,
+                "shadow_choice": "researcher",
+                "shadow_agreed": False,
+                "research_quality": 0.8,
+                "quality_score": 0.0,
+            }
+        ]
+    )
+    components.decision_trace(trace)
+    drawn = fake.drawn
+    assert "would have chosen researcher" in drawn
+    assert "0 of 1 needed no model call at all" in drawn
+    assert "agreed on 0 of 1" in drawn
+
+
+def test_a_failed_audit_call_is_shown_not_hidden(fake: FakeStreamlit) -> None:
+    trace = _trace(
+        decisions=[
+            {
+                "step": 1,
+                "from_agent": "researcher",
+                "to_agent": "analyst",
+                "expected_agent": "analyst",
+                "matched_rule": "settled_quality_met",
+                "llm_decided": False,
+                "llm_called": True,
+                "shadow_error": "rate limited",
+                "research_quality": 0.8,
+                "quality_score": 0.0,
+            }
+        ]
+    )
+    components.decision_trace(trace)
+    assert "audit call failed" in fake.drawn
 
 
 def test_react_discipline_reports_how_each_task_ended(fake: FakeStreamlit) -> None:

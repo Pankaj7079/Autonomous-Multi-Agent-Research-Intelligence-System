@@ -50,14 +50,45 @@ def _routing_agreement(decision_log: list[dict]) -> EvalResult:
 
 
 def _routing_economy(decision_log: list[dict]) -> EvalResult:
-    """What share of routing decisions cost nothing because state already determined them."""
+    """What share of routing decisions made no model call at all.
+
+    Keyed on llm_called, not llm_decided: a settled decision still asks the model for an audit
+    opinion it is not allowed to act on (ADR-050), and that call has a real cost even though the
+    model's answer never became the route. llm_decided alone would report this as still free.
+    """
     if not decision_log:
         return EvalResult(LAYER, "routing_economy", 0.0, False, "no routing decisions were made")
 
-    settled = sum(1 for entry in decision_log if not entry.get("llm_decided"))
-    score = round(settled / len(decision_log), 4)
-    detail = f"{settled}/{len(decision_log)} routing decisions needed no model call"
+    free = sum(1 for entry in decision_log if not entry.get("llm_called"))
+    score = round(free / len(decision_log), 4)
+    detail = f"{free}/{len(decision_log)} routing decisions made no model call at all"
     return EvalResult(LAYER, "routing_economy", score, score >= 0.5, detail)
+
+
+def _shadow_agreement(decision_log: list[dict]) -> EvalResult:
+    """When code already had the answer, did the model's own opinion agree with it?
+
+    This is the audit ADR-050 pays for: every settled decision still asks the model, and this
+    checks whether that second opinion would have chosen the same route. It never changed what
+    happened — this metric is what tells you whether the extra spend was worth anything.
+    """
+    audited = [e for e in decision_log if e.get("llm_called") and not e.get("llm_decided")]
+    if not audited:
+        return EvalResult(LAYER, "shadow_agreement", 1.0, True, "no settled decision was audited")
+
+    answered = [e for e in audited if e.get("shadow_choice")]
+    if not answered:
+        return EvalResult(
+            LAYER, "shadow_agreement", 0.0, False, "every audit call failed to answer"
+        )
+
+    agreed = sum(1 for e in answered if e.get("shadow_agreed"))
+    score = round(agreed / len(answered), 4)
+    detail = f"{agreed}/{len(answered)} audited decisions had the model agree with the rule"
+    failed = len(audited) - len(answered)
+    if failed:
+        detail += f"; {failed} audit call(s) failed and are excluded"
+    return EvalResult(LAYER, "shadow_agreement", score, score >= 0.5, detail)
 
 
 def _research_convergence(decision_log: list[dict]) -> EvalResult:
@@ -162,6 +193,7 @@ class TrajectoryEvaluator:
         results = [
             _routing_agreement(decision_log),
             _routing_economy(decision_log),
+            _shadow_agreement(decision_log),
             _research_convergence(decision_log),
             _loop_efficiency(decision_log),
             _termination_quality(state),

@@ -12,7 +12,6 @@ from pydantic import BaseModel, ConfigDict
 from amaris.agents.base_agent import AgentError, BaseAgent
 from amaris.agents.triage import budget_for
 from amaris.graph.state import subject
-from amaris.memory.episodic import add_research_finding, recall_related
 from amaris.observability.logging import logger
 from amaris.safety.injection import UNTRUSTED_NOTICE, wrap_untrusted
 from amaris.tools.relevance import mean_relevance, score_source
@@ -24,7 +23,6 @@ if TYPE_CHECKING:
     from amaris.graph.state import GraphState
 
 SNIPPET_CHARS = 400
-MEMORY_RECALL_LIMIT = 3
 
 # outside this band the lexical signal is unambiguous and a judge call cannot change the answer
 ASSESS_CONFIDENT_HIGH = 0.75
@@ -37,7 +35,6 @@ REACT_PROMPT = """You are a ReAct research agent. Think, act, observe, repeat.
 Task: {task_description}
 Relevant sources found so far: {found_count} (you are budgeted {budget} for this task)
 Previous findings: {prev_summary}
-Recalled from past sessions: {memory_context}
 Iteration {iteration} of {max_iterations}
 
 Output JSON exactly:
@@ -92,14 +89,13 @@ class ResearcherAgent(BaseAgent):
         budget = budget_for(state["query_depth"])
         query = subject(state)
         tasks = state["research_plan"] or [{"task_id": "t1", "description": query}]
-        recalled = await recall_related(query, limit=MEMORY_RECALL_LIMIT)
 
         # search apis and the headless browser both throttle, so fan out but not without bound
         gate = asyncio.Semaphore(self.settings.max_concurrent_research_tasks)
 
         async def run_task(task: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
             async with gate:
-                return await self._research_task(task, recalled, budget)
+                return await self._research_task(task, budget)
 
         # gather, not a loop — tasks are independent and serial made a 4-task plan 4x slower
         outcomes = await asyncio.gather(*(run_task(task) for task in tasks), return_exceptions=True)
@@ -113,7 +109,6 @@ class ResearcherAgent(BaseAgent):
             query, state["raw_research"], [*sources_outcomes, attached, from_mcp], budget
         )
         quality = await self._self_assess(query, merged, len(tasks))
-        await self._remember(query, merged)
 
         # react_discipline (Layer 3) needs this: did the loop decide it was done, or run out of road
         new_stats = dict(state["react_stats"])
@@ -127,7 +122,6 @@ class ResearcherAgent(BaseAgent):
             tasks=len(tasks),
             quality=quality,
             depth=state["query_depth"],
-            recalled=len(recalled),
         ).info("researcher.done")
 
         # consume the hint: leaving it set makes the supervisor route here forever
@@ -139,7 +133,7 @@ class ResearcherAgent(BaseAgent):
         }
 
     async def _research_task(
-        self, task: dict[str, Any], recalled: list[str], budget: Budget
+        self, task: dict[str, Any], budget: Budget
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         """One ReAct loop. Returns what it gathered plus how it ended, even if a step failed."""
         task_id = str(task.get("task_id", "t?"))
@@ -152,9 +146,7 @@ class ResearcherAgent(BaseAgent):
         for iteration in range(1, max_iterations + 1):
             iterations_used = iteration
             try:
-                decision = await self._decide(
-                    description, found, recalled, iteration, max_iterations, budget
-                )
+                decision = await self._decide(description, found, iteration, max_iterations, budget)
             except Exception as exc:
                 # provider errors surface here too, not just AgentError — one bad step must
                 # not lose the sources this task already gathered
@@ -202,7 +194,6 @@ class ResearcherAgent(BaseAgent):
         self,
         description: str,
         found: list[dict[str, Any]],
-        recalled: list[str],
         iteration: int,
         max_iterations: int,
         budget: Budget,
@@ -218,7 +209,6 @@ class ResearcherAgent(BaseAgent):
             found_count=len(found),
             budget=budget.max_sources,
             prev_summary=self._summarise(found),
-            memory_context="; ".join(recalled)[:500] or "nothing recalled",
             iteration=iteration,
             max_iterations=max_iterations,
         )
@@ -433,15 +423,6 @@ class ResearcherAgent(BaseAgent):
         # counting sources said 69 junk pages were good research, so fall back to how well
 
         return lexical
-
-    async def _remember(self, query: str, sources: list[dict[str, Any]]) -> None:
-        """Store the top findings so a future run starts ahead. No-ops without the memory extra."""
-        for source in sources[:3]:
-            await add_research_finding(
-                query,
-                f"{source.get('title', '')}: {source.get('content', '')[:300]}",
-                url=source.get("url", ""),
-            )
 
     def _summarise(self, found: list[dict[str, Any]]) -> str:
         """Titles come off scraped pages, so they are untrusted text like the bodies are."""
