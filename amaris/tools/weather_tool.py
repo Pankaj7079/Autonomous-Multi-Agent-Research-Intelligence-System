@@ -99,8 +99,7 @@ class Weather:
             parts.append(f"today {self.low_c:.1f} to {self.high_c:.1f}°C")
         if self.rain_chance_pct is not None:
             parts.append(f"{self.rain_chance_pct}% chance of rain")
-        # no full stop: the caller appends the citation marker, and a marker after the stop
-        # becomes its own sentence, which the citation audit then has nothing to check
+        # no trailing period: citation marker after period becomes orphan sentence
         return f"{self.where}: {', '.join(parts)} (as of {self.observed} local time)"
 
 
@@ -281,10 +280,7 @@ _NOISE_WORDS = frozenset(
 )
 # anything that is not part of a place name, so "delhi?" and "new-york" both survive
 _NOT_NAME = re.compile("[^A-Za-z0-9' -]+")
-# generous enough for real phrasing ("can you please tell me the weather in X today") while a
-# compound question mixing weather with something else usually runs longer than this and falls
-# through to triage instead — where a wrong guess here is cheap anyway (the geocoder returns
-# nothing and the run falls back to research), this is a length past which it stops being cheap
+# short-question heuristic: weather-only fits <N chars, longer falls to triage
 _MAX_WORDS = 12
 
 

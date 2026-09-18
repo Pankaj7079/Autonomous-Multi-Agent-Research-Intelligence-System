@@ -28,8 +28,7 @@ _SENTENCE = re.compile(r"(?<=[.!?])\s+|\n+")
 _REFERENCES = re.compile(r"^#{1,6}\s*references\b.*", re.IGNORECASE | re.MULTILINE)
 # markdown emphasis and heading marks, stripped so "**Prompt caching**" reads as two words
 _MARKUP = re.compile(r"[*_`#>]+")
-# every unicode dash folded to a plain hyphen, so a range compares equal whichever
-# character the page happened to use
+# dash normalization: unicode dashes → plain hyphens
 _DASHES = str.maketrans(dict.fromkeys(map(chr, (0x2012, 0x2013, 0x2014, 0x2015, 0x2212)), "-"))
 
 # a figure worth checking: 90%, $3.00, 1,000, 2024, 10-45% (each side matched separately)
@@ -166,8 +165,7 @@ def audit(
         if item.get("url")
     }
 
-    # a citation pointing at a page we never stored is dead whatever sentence used it, so it is
-    # counted over the citation list rather than only when some sentence happens to cite it
+    # dead citations: references to unstored pages counted at list level
     dead = sum(
         1 for item in by_index.values() if not text_by_url.get(str(item.get("url", "")), "").strip()
     )
@@ -180,8 +178,7 @@ def audit(
             continue
         facts = _facts(sentence)
         if not facts:
-            # prose with no figure in it: nothing here can be checked without a model, and
-            # guessing at it is what made the old warning fire on every answer
+            # prose without figures can't be model-checked — skip
             skipped += 1
             continue
         for marker in dict.fromkeys(markers):
@@ -247,8 +244,7 @@ def caveat(result: CitationAudit) -> str:
             f"{result.unsupported} of {result.checked} checked claims cite a page that does not "
             f"mention what they assert ({detail})."
         )
-    # two or more: one citation is trivially one domain, and warning about that on a fully
-    # grounded short answer is noise that teaches the reader to ignore the caveat line
+    # skip single-domain warning on short, fully-grounded answers
     if result.cited_sources > 1 and result.domains == 1:
         return "Every citation points at the same site, so this answer rests on a single source."
     return ""

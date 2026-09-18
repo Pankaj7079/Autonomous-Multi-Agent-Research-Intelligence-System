@@ -84,8 +84,7 @@ class ReportEvaluator:
                 )
             )
 
-        # an unscored 0.0 needs to be visibly different from a real 0.0 in the log, or "the judge
-        # got rate limited" and "the report genuinely hallucinated" look identical
+        # unscored 0.0 vs real 0.0: must be visibly different in logs
         unscored = [r.metric for r in results if not r.scored]
         logger.bind(**{r.metric: r.score for r in results}, unscored=unscored or None).info(
             "report_eval.scored"

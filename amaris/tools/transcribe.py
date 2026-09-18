@@ -16,9 +16,7 @@ from typing import Any
 from amaris.config.settings import get_settings
 from amaris.observability.logging import logger
 
-# whisper invents a stock phrase when handed silence or noise — measured against this very
-# endpoint, one second of digital silence transcribes as " Thank you.". Researching that
-# would cost a full 60-90s pipeline run for a question nobody asked.
+# Whisper hallucination: silence transcribes as "Thank you." — not worth researching
 SILENCE_ARTIFACTS = frozenset(
     {
         "",

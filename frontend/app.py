@@ -47,22 +47,18 @@ HTTP_TIMEOUT_SECONDS = 30.0
 # mirrors ResearchRequest.query's min_length so both deployment modes reject the same input
 MIN_QUERY_CHARS = 3
 
-# the memory check pings qdrant, so it is cached — long enough to stay off the hot path,
-# short enough that starting docker mid-session shows up without a restart
+# memory check cached: pings Qdrant but stays off hot path
 CAPABILITY_TTL_SECONDS = 60
 
-# PDF only. a scanned PDF still works — its pages are rasterised and read as images inside
-# the ingest path, which is why the image machinery stays even though uploads no longer take one
+# PDF-only upload: scanned pages rasterize through image path
 ATTACHMENT_TYPES = ["pdf"]
 
 # "auto" is not a depth, it is the absence of one — triage sizes the question as it always has
 DEPTH_CHOICES = ("auto", "brief", "standard", "deep")
 DEPTH_KEY = "depth_choice"
-# streamlit drops the state of a widget that a rerun did not draw, and a run returns early
-# before the picker — so the choice is mirrored here, where nothing collects it
+# Streamlit widget state: mirrored so rerun doesn't drop the choice
 DEPTH_SAVED = "depth_choice_saved"
-# the sidebar collapses on our own flag: streamlit's control reopens from the app header,
-# which this UI removes, so its own collapse is a one-way door
+# sidebar collapse controlled by our own flag (Streamlit's control removed)
 SIDEBAR_HIDDEN = "sidebar_hidden"
 # a visitor's own provider key, held in their session only and never written anywhere
 BYO_KEYS = "byo_keys"
@@ -72,16 +68,13 @@ KEY_FIELDS = {
     "glm": "glm_api_key",
     "anthropic": "anthropic_api_key",
 }
-# solid triangles rather than chevrons: ruff rejects the chevron characters as
-# look-alikes for < and >, and these read as direction at any size
+# solid triangles instead of chevrons: ruff rejects chevron look-alikes
 HIDE_MARK = "◀"
 SHOW_MARK = "▶"
-# from real runs, not from the budget numbers: brief measured 94s and deep 206s. scraping and
-# the evaluator's ~45s dominate, so even the shallow depths are a minute rather than seconds
+# real-run timings: brief 94s, deep 206s — even shallow depths take a minute
 DEPTH_ETA = {"brief": "~1-2 min", "standard": "~2-3 min", "deep": "~3-6 min"}
 
-# two, one per research level, and each locks the depth it advertises — three examples that
-# all triaged to whatever triage felt like demonstrated nothing about the depth system
+# two example questions (one per depth level) — three identical ones proved nothing
 EXAMPLES = (
     ("what is prompt caching and when does it pay off?", "brief"),
     ("how do LangGraph, CrewAI and AutoGen compare for production agents?", "deep"),
@@ -112,8 +105,7 @@ def _payload(action: dict[str, Any]) -> dict[str, Any]:
         body["depth"] = action["depth"]
     if action.get("prior_sources"):
         body["prior_sources"] = action["prior_sources"]
-    # local mode runs the pipeline in the API process, so a key typed here has to travel with
-    # the request or it never reaches the agents. cloud mode binds it in-process and sends none.
+    # local mode: API key must travel with request (not bound in-process like cloud)
     keys = st.session_state.get(BYO_KEYS, {})
     if keys:
         body["api_keys"] = keys
@@ -176,8 +168,7 @@ async def _run_cloud(action: dict[str, Any], on_event: EventSink) -> RunOutcome:
 def _execute(action: dict[str, Any], is_cloud: bool) -> None:
     """Drive one run, repainting the live view on every event rather than polling for state."""
     events: list[ProgressEvent] = []
-    # the question stays on screen for the whole run — for a spoken one this is the only
-    # confirmation of what was actually heard
+    # question display stays for duration of run — only confirmation of what was heard
     head = st.empty()
     with head.container():
         asking(action["query"], spoken=bool(action.get("spoken")))
@@ -237,8 +228,7 @@ def _sidebar(mode: str) -> None:
     with head:
         st.markdown(wordmark("sb-mark"), unsafe_allow_html=True)
     with control:
-        # in the header row rather than absolutely positioned in the corner, where it floated
-        # above the wordmark and read as a stray control belonging to nothing
+        # info button in header row (not corner float) to avoid overlapping wordmark
         st.button(HIDE_MARK, key="sb_hide", help="collapse the sidebar", on_click=_toggle_sidebar)
     st.markdown(
         f'<div class="sb-sub">Research console'
@@ -274,8 +264,7 @@ def _sidebar(mode: str) -> None:
     with st.expander("Depth budgets"):
         depth_table()
 
-    # last, under every panel that describes the system: this one is about the session, and it
-    # is the only section that grows, so anything below it would drift down the column
+    # session section last in sidebar: only growing element, avoids layout drift
     turns = thread.turns()
     heading = f"Conversation · {len(turns)}" if turns else "Conversation"
     with st.expander(heading, expanded=bool(turns)):
@@ -404,8 +393,7 @@ def _transcribe(audio: Any) -> str | None:
         st.error(f"speech input failed: {exc}")
         return None
 
-    # no toast here: the rerun that starts the run discards it before it can be read. The
-    # transcript is shown by the run header instead, which lasts the whole run.
+    # no toast: rerun discards it before read; run header shows transcript instead
     return spoken
 
 
@@ -428,9 +416,7 @@ def _examples() -> None:
 
 def _depth_picker() -> str:
     """The depth the next question runs at, or "" to let triage size it."""
-    # a heading, not a bare row of chips: the picker sat unlabelled under the examples, and its
-    # margin is also what clears the budget line above it — streamlit measures a markdown
-    # element at one line's height, so anything taller overflows into whatever comes next
+    # depth picker: heading, not bare chips; margin clears budget line above
     st.markdown('<div class="lvl-hd">Research level</div>', unsafe_allow_html=True)
     picked = st.segmented_control(
         "depth",
@@ -452,8 +438,7 @@ def _depth_picker() -> str:
             f"up to {budget.max_sources} sources · ~{budget.word_target} words · "
             f"{DEPTH_ETA.get(choice, '')} · triage spends no model call"
         )
-    # markdown, not st.caption: this sheet renders captions as 0.68rem grey mono, which is the
-    # console look and the least readable line on the page
+    # markdown, not st.caption: caption renders as 0.68rem grey mono (unreadable)
     st.markdown(
         f'<div class="depth-note"><span class="lvl">{html.escape(choice)}</span>{note}</div>',
         unsafe_allow_html=True,
@@ -495,8 +480,7 @@ def _sweep_old_attachments() -> int:
 
 
 def main() -> None:
-    # set_page_config must be the first streamlit call on the page; the sidebar carries
-    # status and the thread, so it must not open collapsed
+    # set_page_config must be first Streamlit call; sidebar must not start collapsed
     st.set_page_config(
         page_title="AMARIS",
         page_icon="◆",
@@ -507,8 +491,7 @@ def main() -> None:
     settings = get_settings()
     inject_css()
     use_session_keys(st.session_state.get(BYO_KEYS, {}))
-    # re-validated per run, not read from the cached boot report: a key entered in the browser
-    # must clear the "no provider configured" error that report was written before
+    # re-validate API key per run (cached boot report may be stale)
     report = validate_config()
 
     from amaris.llm.router import configured_chain
@@ -533,8 +516,7 @@ def main() -> None:
     for index, turn in enumerate(turns):
         thread.turn_card(turn, index, is_last=index == len(turns) - 1)
 
-    # a pending action runs here so its live view lands under the thread, where the new
-    # turn card will appear once it finishes
+    # pending action renders under thread panel where next turn card will appear
     pending = st.session_state.pop(thread.PENDING, None)
     if pending:
         _dispatch(pending, settings)
@@ -576,11 +558,9 @@ def main() -> None:
         asked = spoken
 
     if asked.strip():
-        # whatever rejects the question below must still say what was heard, or a misheard
-        # word looks like the microphone failing
+        # show what was heard even if question is rejected (misheard ≠ mic failure)
         heard = f' — heard "{asked.strip()}"' if by_voice else ""
-        # the same floor ResearchRequest enforces, checked here so cloud mode rejects a
-        # two-character question as readably as the API does instead of raising mid-run
+        # client-side length check mirrors ResearchRequest floor (cloud mode readability)
         if len(asked.strip()) < MIN_QUERY_CHARS:
             st.error(f"a question needs at least {MIN_QUERY_CHARS} characters{heard}")
             return

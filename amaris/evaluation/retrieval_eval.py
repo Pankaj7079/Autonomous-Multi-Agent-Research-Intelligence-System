@@ -17,9 +17,7 @@ if TYPE_CHECKING:
     from amaris.graph.state import GraphState
 
 LAYER = "retrieval"
-# context_precision needs *some* text standing in for "what the research concluded" — using the
-# writer's report here would blur retrieval quality with writing quality, so this layer only ever
-# sees the analyst's intermediate synthesis, never the final cited report
+# uses analyst synthesis (not writer report) to isolate retrieval quality
 _FALLBACK_SOURCE_LIMIT = 4
 _FALLBACK_SNIPPET_CHARS = 200
 
@@ -97,8 +95,7 @@ class RetrievalEvaluator:
                 )
             )
 
-        # an unscored 0.0 needs to be visibly different from a real 0.0 in the log, or "the judge
-        # got rate limited" and "the sources were genuinely useless" look identical
+        # unscored 0.0 vs real 0.0: must be visibly different in logs
         unscored = [r.metric for r in results if not r.scored]
         logger.bind(**{r.metric: r.score for r in results}, unscored=unscored or None).info(
             "retrieval_eval.scored"

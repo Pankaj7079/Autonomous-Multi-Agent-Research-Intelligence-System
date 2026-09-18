@@ -15,8 +15,7 @@ APPROVE = "approve"
 # the report answers a different question than the one asked — re-plan, don't re-search
 WRONG_TOPIC = "wrong_topic"
 
-# named individually so trajectory_eval.py can re-derive supervisor routing without
-# hard-coding agent name strings a second time
+# state fields named individually for trajectory_eval re-derivation
 PLANNER = "planner"
 RESEARCHER = "researcher"
 ANALYST = "analyst"
@@ -56,17 +55,14 @@ class GraphState(TypedDict):
 
     # prior turns in this conversation, oldest first: {"query": ..., "answer": ...}
     history: list[dict[str, str]]
-    # the question as a standalone sentence — "what about his brother?" is useless as a
-    # search string, so triage resolves it against history and everything that hunts for
-    # sources uses this instead. The answer still addresses original_query.
+    # resolved_query — triage resolves ambiguous queries against history
     resolved_query: str
 
     # planner
     research_plan: list[dict[str, Any]]
     research_strategy: str
 
-    # files the user attached: [{name, url, chunks}]. The text lives in Qdrant, not here —
-    # the researcher retrieves the relevant chunks per task rather than carrying the document
+    # ingested_files — Qdrant text lives in Qdrant, not in state
     attachments: list[dict[str, Any]]
 
     # researcher — research_quality is its own 0-1 self-assessment
@@ -95,12 +91,10 @@ class GraphState(TypedDict):
     # one entry per supervisor call — the trajectory evaluator's only input (ADR-017)
     decision_log: list[dict[str, Any]]
 
-    # researcher — per task_id: {iterations_used, self_terminated}. Powers react_discipline;
-    # loguru sees every ReAct step, but only this survives to be scored after the run ends
+    # react_steps — per-task ReAct telemetry survives to evaluation scoring
     react_stats: dict[str, dict[str, Any]]
 
-    # every tool and MCP call, in order: {tool, kind, agent, target, ok, ms, detail, at}.
-    # the logs always had these; nothing carried them to the reader (ADR-048)
+    # tool_calls — ordered audit trail of every tool/MCP call (ADR-048)
     tool_calls: list[dict[str, Any]]
 
     # evaluator
@@ -109,8 +103,7 @@ class GraphState(TypedDict):
     # what the report's citations actually support, checked without a model call (ADR-039)
     citation_audit: dict[str, Any]
 
-    # set by triage when the question asks for live state rather than research, e.g.
-    # {"kind": "weather", "place": "Darbhanga"} — the live node answers it from a data source
+    # live_intent — triage marks live-state queries (e.g., weather) for the live node
     live_data: dict[str, Any]
 
     # set by any node that failed; the supervisor sees it and routes to FINISH

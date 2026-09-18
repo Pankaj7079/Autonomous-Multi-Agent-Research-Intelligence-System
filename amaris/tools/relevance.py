@@ -92,8 +92,7 @@ def score_source(query: str, source: dict[str, Any]) -> float:
     title = _tokens(str(source.get("title", "")))
     content = _tokens(str(source.get("content", ""))[:_CONTENT_SCAN_CHARS])
 
-    # each query term scores where it was found, so half a query matched in body text
-    # lands near 0.25 while a real hit titled with the whole query lands near 1.0
+    # term scoring: body-only match ≈0.25, titled match ≈1.0
     earned = sum(
         _TITLE_WEIGHT if term in title else _CONTENT_WEIGHT if term in content else 0.0
         for term in wanted
@@ -119,8 +118,7 @@ def select_for_prompt(
     scored.sort(key=lambda item: item["relevance"], reverse=True)
 
     kept = [item for item in scored if item["relevance"] >= floor]
-    # a query whose wording shares nothing with any source would otherwise hand the writer
-    # nothing at all, which is worse than handing it the closest matches available
+    # fallback: hand writer closest matches when nothing shares wording
     return (kept or scored)[:limit]
 
 

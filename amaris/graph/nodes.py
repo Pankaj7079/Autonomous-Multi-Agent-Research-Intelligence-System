@@ -70,8 +70,7 @@ async def _run_node(
         # the supervisor reads error and routes to FINISH, so the run ends cleanly
         return {"error": f"{name} failed: {exc}", **_tools_used(state)}
 
-    # agent_path is "who actually ran": with forced hops as direct edges, the supervisor no
-    # longer sees every step, so each node has to record its own
+    # each node records its own agent_path (supervisor no longer sees every step)
     if track_path:
         update["agent_path"] = [*state["agent_path"], name]
     update.update(_tools_used(state))
@@ -111,8 +110,7 @@ async def live_node(state: GraphState) -> dict[str, Any]:
     """
     from amaris.tools.weather_tool import current_weather
 
-    # this node calls a tool without going through _run_node, so it records its own — and
-    # binds its name, or the call shows up in the table with no agent against it
+    # tool node records its own agent name to avoid empty table cell
     start_recording()
     place = str((state["live_data"] or {}).get("place", ""))
     with agent_context("live"):

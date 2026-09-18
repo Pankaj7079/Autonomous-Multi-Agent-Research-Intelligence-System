@@ -48,9 +48,7 @@ def _shim_sunset_vertexai() -> None:
     sys.modules[name] = shim
 
 
-# installed at import time, not lazily inside judge(): retrieval_eval.py and report_eval.py both
-# import `ragas.metrics` directly (to build metric objects), and that import alone triggers the
-# broken chain — waiting for judge() to be called first would leave that path unprotected
+# fix ragas broken import chain at module level, not lazily
 _shim_sunset_vertexai()
 
 
@@ -93,8 +91,7 @@ def judge() -> Any | None:
 
             from amaris.llm.router import configured_chain, get_fallback_llm, get_llm
 
-            # the evaluator runs last, after the pipeline has spent the primary's rate window,
-            # so scoring must not go to the primary or it NaNs on a rate limit every run
+            # evaluator uses secondary provider to avoid primary rate-limit
             preferred = get_settings().eval_provider.strip().lower()
             if preferred in configured_chain():
                 return LangchainLLMWrapper(get_llm("evaluation", provider=preferred))
@@ -131,15 +128,10 @@ def is_available() -> bool:
     return judge() is not None
 
 
-# ragas's own RunConfig defaults to max_retries=10, max_wait=60, timeout=180 — a retry loop
-# with zero awareness of our router's cooldown parking (ADR-002). Found live: Layer 1 ran right
-# after a groq rate limit and spent the full 120s of our own timeout inside ragas's internal
-# backoff, never reaching our asyncio.wait_for at all. A judge call is one metric on one sample —
-# it should fail in a few seconds, not retry for two minutes.
+# ragas retry defaults overridden: 10 retries/60s burned 120s on cooldown
 _RAGAS_MAX_RETRIES = 1
 _RAGAS_MAX_WAIT_SECONDS = 15
-# ragas defaults to 16 parallel judge calls, which both times out and 429s a slow free-tier
-# provider. the evaluator is not latency critical, so it goes narrow instead of wide.
+# ragas parallel calls reduced from 16 to narrow mode for free-tier providers
 _RAGAS_MAX_WORKERS = 2
 
 

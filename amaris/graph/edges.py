@@ -77,8 +77,7 @@ def register_edges(workflow: StateGraph) -> None:
     workflow.add_edge(CLARIFY, END)
     workflow.add_conditional_edges(LIVE, route_from_live, LIVE_MAP)
 
-    # a plan always needs researching and research always needs writing up — asking a model
-    # to confirm that cost a call per hop and never once chose differently
+    # hardcoded plan→research→write path saves one LLM call per hop
     workflow.add_edge(PLANNER, RESEARCHER)
     workflow.add_edge(ANALYST, WRITER)
     workflow.add_edge(WRITER, CRITIC_NODE)

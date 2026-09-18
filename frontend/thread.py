@@ -133,16 +133,14 @@ def session_totals() -> dict[str, str]:
 
     traces = [turn["result"].trace for turn in scored]
     seconds = sum(float(turn.get("elapsed") or 0.0) for turn in turns())
-    # deduped across turns: a follow-up re-reads the same pages, so summing per-run counts
-    # would claim the conversation saw twice the evidence it did
+    # dedupe source counts across turns (follow-ups re-read same pages)
     urls = {
         str(source.get("url", ""))
         for trace in traces
         for source in trace.sources
         if source.get("url")
     }
-    # a live-data answer is never scored by the critic, so averaging its 0.0 in would report
-    # the conversation as failing when nothing failed
+    # exclude live-data 0.0 from conversation average (skews score)
     judged = [t.quality_score for t in traces if t.quality_score]
     return {
         "Avg score": f"{sum(judged) / len(judged):.2f}" if judged else "—",
@@ -280,8 +278,7 @@ def _render_markdown(text: str) -> str:
     """
     from markdown_it import MarkdownIt
 
-    # no linkify: it needs linkify-it-py, which is not a dependency, and the Sources tab
-    # already gives every url as a real link
+    # no linkify dependency — Sources tab already provides real links
     return MarkdownIt("commonmark", {"html": False}).enable("table").render(text)
 
 

@@ -17,12 +17,10 @@ JobState = Literal["queued", "running", "done", "failed"]
 
 # an expand reuses what the last turn gathered; 20 is the deepest budget's max_sources
 MAX_PRIOR_SOURCES = 20
-# each attached file becomes one citable source, so this is also a cap on how much of the
-# reference list one upload can occupy
+# cap on how much of reference list one upload can occupy
 MAX_ATTACHMENTS = 5
 
-# progress is derived from which agent is active, not a real fraction — the path is
-# decided at runtime so an exact percentage would be a lie (docs/DESIGN.md)
+# progress is derived from active agent, not a real fraction
 AGENT_PROGRESS: dict[str, int] = {
     "triage": 5,
     "clarify": 99,
@@ -67,15 +65,12 @@ class ResearchRequest(BaseModel):
     query: str = Field(min_length=3, max_length=500)
     session_id: str | None = None
     history: list[PriorTurn] = Field(default_factory=list, max_length=HISTORY_TURNS)
-    # the depth this run must use, already resolved by the caller — the depth picker sends its
-    # choice and "explain in detail" sends the bumped one. None means triage decides as usual.
+    # pre-resolved depth — None means triage decides
     depth: str | None = None
     prior_sources: list[dict[str, Any]] = Field(default_factory=list, max_length=MAX_PRIOR_SOURCES)
-    # files already ingested into Qdrant for this session: [{name, url, chunks}]. The text is
-    # not carried here — the researcher retrieves what it needs by session_id.
+    # ingested files tracked per session — researcher retrieves by session_id
     attachments: list[dict[str, Any]] = Field(default_factory=list, max_length=MAX_ATTACHMENTS)
-    # the caller's own provider keys, bound for this job only (ADR-037). deliberately kept out
-    # of seed(): a key has no business in GraphState, which is checkpointed and replayed
+    # per-run provider keys, kept out of GraphState (ADR-037)
     api_keys: dict[str, str] = Field(default_factory=dict, exclude=True)
 
     def seed(self) -> dict[str, Any]:
@@ -89,8 +84,7 @@ class ResearchRequest(BaseModel):
             seed["query_depth"] = self.depth
             seed["depth_locked"] = True
         if self.prior_sources:
-            # the trace trims content down to "snippet", so accept either key or the reused
-            # sources reach the writer with no text at all
+            # trace trims content to "snippet" — accept either key
             seed["raw_research"] = [
                 {**item, "content": item.get("content") or item.get("snippet", "")}
                 for item in self.prior_sources
@@ -116,8 +110,7 @@ class RunTrace(BaseModel):
     source_count: int = 0
     critic_feedback: str = ""
     top_issue: str = ""
-    # the planner's tasks and the analyst's synthesis existed only in graph state until now,
-    # so the two agents in the middle of the run had nothing to show for themselves
+    # planner tasks and analyst synthesis — previously hidden from output
     research_plan: list[dict[str, Any]] = Field(default_factory=list)
     research_strategy: str = ""
     analysis: str = ""
@@ -131,8 +124,7 @@ class RunTrace(BaseModel):
     audit: dict[str, Any] = Field(default_factory=dict)
     # non-empty when the answer came from a data source rather than research (ADR-041)
     live: dict[str, Any] = Field(default_factory=dict)
-    # every tool and MCP call the run made, in order — the shape of each call, never its
-    # arguments or results (ADR-048)
+    # tool call shapes (not args/results) for audit (ADR-048)
     tool_calls: list[dict[str, Any]] = Field(default_factory=list)
 
 
@@ -168,8 +160,7 @@ class ProgressEvent(BaseModel):
     status: JobState
     message: str
     progress_pct: int
-    # seconds since the run started, set by the producer — a ui cannot derive this from ts,
-    # which is second-resolution and says nothing about when the run itself began
+    # elapsed time set by producer — ts is second-resolution only
     elapsed_s: float = 0.0
     ts: str = Field(default_factory=lambda: datetime.now(UTC).isoformat(timespec="seconds"))
 

@@ -43,8 +43,7 @@ GATE_CHOICES: dict[str, tuple[str, ...]] = {
     REVIEW_GATE: (WRITER, RESEARCHER, PLANNER, FINISH),
 }
 
-# one more researcher visit than this and we are paying for searches that keep returning
-# the same pages; the gate stops being a judgement call and becomes a stop
+# hard cap on researcher revisits — stops paying for repeated identical pages
 MAX_RESEARCH_VISITS = 3
 MAX_PLAN_VISITS = 2
 # below this a run has essentially nothing to write from, whatever the self-assessment said
@@ -307,13 +306,11 @@ class SupervisorAgent(BaseAgent):
         gate = self._gate(state)
 
         if state.get("error"):
-            # not a routing question — there is exactly one sane answer, so no audit call
-            # either; asking a model "what now" about a caught exception buys nothing (ADR-050)
+            # skip audit call for caught exceptions — no sane alternative (ADR-050)
             return self._decide(state, gate, snapshot, FINISH, "error_set", llm_decided=False)
 
         settled = self._settled(state, gate, snapshot)
-        # a run that cleared the floor is approved even when it also hit the revision cap —
-        # checking the cap first labelled a passing 0.78 run as having given up
+        # passing run + revision cap → approve, not give up
         if settled and settled[0] == FINISH:
             return await self._decide_settled(state, gate, snapshot, FINISH, settled[1])
 

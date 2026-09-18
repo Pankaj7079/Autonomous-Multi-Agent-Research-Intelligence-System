@@ -19,8 +19,7 @@ class EvalResult:
     score: float
     passed: bool
     detail: str
-    # false when the judge never produced a number — "not scored" and "scored zero" mean
-    # opposite things, and consumers used to tell them apart by grepping detail for "NaN"
+    # scored=False distinguishes "not scored" from "scored zero"
     scored: bool = True
     timestamp: str = field(default_factory=lambda: datetime.now(UTC).isoformat(timespec="seconds"))
 

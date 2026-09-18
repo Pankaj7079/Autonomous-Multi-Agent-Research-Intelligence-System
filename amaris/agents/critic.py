@@ -19,8 +19,7 @@ if TYPE_CHECKING:
 DIMENSIONS = ("answer_fit", "faithfulness", "completeness", "coherence", "citation_quality")
 VALID_HINTS = (NEED_MORE_RESEARCH, FIX_WRITING, WRONG_TOPIC, APPROVE)
 REPORT_CHARS = 6000
-# never below the writer's own cut, or the critic marks claims unfaithful that it simply
-# cannot see the evidence for — found live, scoring an accurate report 0.2 on faithfulness
+# floor prevents scoring accurate reports 0.2 on faithfulness (live bug)
 SOURCE_CHARS = WRITER_SOURCE_CHARS
 # below this the report is not a weaker answer to the question, it is an answer to another one
 ANSWER_FIT_FLOOR = 0.5
@@ -152,8 +151,7 @@ class CriticAgent(BaseAgent):
         """An unrecognised or self-contradictory hint would strand the supervisor."""
         cleaned = str(raw or "").strip().lower()
 
-        # approving a report that does not answer the question is the one contradiction we
-        # override — the supervisor sends this back to the planner, not the writer
+        # approve + low answer_fit → override to wrong_topic, send to planner not writer
         if cleaned == APPROVE and scores["answer_fit"] < ANSWER_FIT_FLOOR:
             logger.bind(answer_fit=scores["answer_fit"]).warning("critic.approved_wrong_topic")
             return WRONG_TOPIC

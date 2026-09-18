@@ -57,8 +57,7 @@ class PlannerAgent(BaseAgent):
         query = subject(state)
         max_tasks = budget_for(state["query_depth"]).tasks
 
-        # a one-task plan for a one-angle question is the query itself, so asking a model to
-        # restate it is a call that cannot change the outcome
+        # skip LLM restatement for single-task single-angle queries
         if max_tasks <= 1:
             logger.bind(tasks=1, depth=state["query_depth"], llm=False).info("planner.planned")
             return {

@@ -129,8 +129,7 @@ def configure_from_settings(force: bool = False) -> None:
     configure_logging(
         level=s.log_level, log_dir=s.log_dir, json_enabled=s.log_json_enabled, force=force
     )
-    # here rather than in each entrypoint: the api, the pipeline cli and the harness all call
-    # this already, and a tracer nobody switched on is the bug this fixes (ADR-043)
+    # centralized tracer init: all entrypoints call this (ADR-043)
     from amaris.observability.tracing import configure_tracing
 
     configure_tracing()

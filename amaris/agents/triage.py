@@ -24,13 +24,11 @@ class Budget:
     react_iterations: int
     results_per_search: int
     max_sources: int
-    # shallow depths go straight from researcher to writer — a synthesis pass over six
-    # sources tells the writer nothing it cannot see itself, and costs a reasoning call
+    # shallow depths skip synthesis — writer sees sources directly
     analysis: bool
     word_target: int
     sections: tuple[str, ...]
-    # the critic pass this run is allowed to reach; 1 means review once and never rewrite,
-    # which is what stops a 60-word answer paying for a 44s re-research round
+    # max critic passes: 1 = review once, prevents re-research loop
     max_revisions: int
 
 
@@ -45,8 +43,7 @@ DEPTH_BUDGETS: dict[str, Budget] = {
         5,
         4,
         8,
-        # 20, not 12: deep used to read exactly as many sources as standard, so the only
-        # thing it bought was a longer report written from the same evidence
+        # 20 sources (was 12, silently clamped to standard budget)
         20,
         True,
         1100,
@@ -62,8 +59,7 @@ DEPTH_BUDGETS: dict[str, Budget] = {
     ),
 }
 
-# what "explain in detail" moves to. the caller applies this and sends the resolved depth,
-# so triage never has to work out whether it was asked to bump or to obey
+# depth resolution constant — caller sends resolved depth, triage never bumps
 NEXT_DEPTH: dict[str, str] = {
     "direct": "brief",
     "brief": "standard",
@@ -198,8 +194,7 @@ class TriageAgent(BaseAgent):
     task_type = "triage"
 
     async def _run(self, state: GraphState) -> dict[str, Any]:
-        # checked before the depth lock: picking "deep" does not make scraping the right way to
-        # find out what the temperature is right now (ADR-041)
+        # don't use scraping for live-state queries like temperature (ADR-041)
         place = place_for_weather_query(state["original_query"])
         if place:
             return self._live(place)
@@ -215,8 +210,7 @@ class TriageAgent(BaseAgent):
                 TriageOutput,
             )
         except Exception as exc:
-            # broad on purpose: a provider 400 is not an AgentError, and letting it reach the
-            # node wrapper sets state["error"], which poisons a run triage was only sizing
+            # broad catch: provider 400 shouldn't poison triage's sizing run
             logger.bind(error=str(exc)[:150]).warning("triage.failed")
             payload = TriageOutput()
 
@@ -261,8 +255,7 @@ class TriageAgent(BaseAgent):
         budget = budget_for(depth)
 
         answerable = payload.answerable or not payload.clarifying_question.strip()
-        # the only thing triage asks back for is a missing subject, and an attached file is the
-        # subject — asking "which document?" about the one file just uploaded is never right
+        # don't ask "which document?" when user just uploaded a file
         if attachments and not answerable:
             logger.bind(files=len(attachments)).info("triage.attachment_answers_it")
             answerable = True

@@ -30,8 +30,7 @@ class Settings(BaseSettings):
 
     # which provider leads the fallback chain; the rest keep their documented order
     primary_provider: str = "groq"
-    # the judge needs to be fast AND hold quota the pipeline did not just spend. gemini
-    # bills per day and evaluation is only a few calls, so it suits this and groq does not.
+    # judge needs speed + separate quota (Gemini, not Groq)
     eval_provider: str = "gemini"
 
     # SecretStr so a stray repr() or log of the settings object can't leak a key
@@ -42,10 +41,7 @@ class Settings(BaseSettings):
     tavily_api_key: SecretStr | None = None
     # a classic PAT is enough for the remote GitHub MCP endpoint; no OAuth app needed
     github_token: SecretStr | None = None
-    # off by default: a research run would otherwise spawn npx/uvx subprocesses, which is a
-    # surprise in tests and a cold start in cloud mode where no node runtime exists
-    # uploaded chunks older than this are swept at startup; 0 disables the sweep. "start over"
-    # already deletes them, but a closed browser tab never presses a button
+    # off by default: prevents npx/uvx subprocesses in tests/cloud; stale chunk sweep
     attachment_retention_hours: float = Field(default=24.0, ge=0.0)
     mcp_client_enabled: bool = False
     # empty disables the filesystem MCP server: pointing an agent at a whole disk is not a default
@@ -68,8 +64,7 @@ class Settings(BaseSettings):
     qdrant_api_key: SecretStr | None = None
 
     sqlite_checkpoint_db: str = "./checkpoints.db"
-    # checkpoints resume a crashed run, so only recent threads are worth keeping — nothing
-    # pruned them before and the file grew ~176KB per run forever
+    # thread pruning: old checkpoints pruned at startup
     checkpoint_keep_threads: int = Field(default=50, ge=1)
 
     # bounds only — the cross-field check (research < approve) belongs to Tier 1 patch 3
@@ -80,14 +75,11 @@ class Settings(BaseSettings):
     research_quality_threshold: float = Field(default=0.60, ge=0.0, le=1.0)
     quality_approve_threshold: float = Field(default=0.72, ge=0.0, le=1.0)
 
-    # how many sources any agent prompt may carry; the researcher's cap never exceeds it.
-    # 20 so the deep budget can actually use its headroom — at 12 this silently clamped it
-    # back down to the standard budget and deep read no more than standard did
+    # max sources per prompt — deep budget needs headroom (was 12, clamped)
     max_sources_in_prompt: int = Field(default=20, ge=1)
     # browsers and search apis both throttle, so tasks fan out but not without bound
     max_concurrent_research_tasks: int = Field(default=3, ge=1)
-    # 0.35 drops a source that matched only half the query and only in its body text —
-    # exactly the "weather API pricing" pages a "today's weather" query used to keep
+    # relevance threshold 0.35 — drops half-matches in body text only
     relevance_floor: float = Field(default=0.35, ge=0.0, le=1.0)
 
     # attachments: extraction is capped so one upload cannot blow up every downstream prompt
@@ -113,13 +105,11 @@ class Settings(BaseSettings):
     # emailing a report — resend speaks plain http, so httpx covers it and there is no new dep
     resend_api_key: SecretStr | None = None
     email_from: str = "AMARIS <onboarding@resend.dev>"
-    # empty means any recipient. a public demo that mails anywhere is an open relay, so cloud
-    # mode refuses to send until this names the domains it is allowed to reach
+    # empty blocks cloud mode from being an open relay
     email_allowed_domains: list[str] = Field(default_factory=list)
     email_max_per_session: int = Field(default=5, ge=1)
 
-    # must exceed the slowest single request (GLM, 90s) or the budget is spent before the first
-    # attempt returns and no retry is ever possible — which is how a deep writer call died once
+    # must exceed slowest provider (GLM 90s) or no retry is possible
     llm_retry_budget_seconds: float = Field(default=150.0, ge=0.0)
     # ragas makes one judge call per metric per context, so it needs its own ceiling
     ragas_timeout_seconds: float = Field(default=120.0, ge=1.0)
@@ -173,18 +163,14 @@ class Settings(BaseSettings):
         return [provider for provider, field in pairs if self.key(field)]
 
 
-# a visitor's own key on a shared cloud process. a contextvar and not os.environ or the settings
-# singleton: streamlit runs each session's script in its own thread, so a value set here is
-# visible to that run's coroutines and to nobody else's. the process-global alternatives are a
-# cross-visitor key leak on any deployment serving more than one person at a time.
+# per-thread provider key via ContextVar (prevents cross-visitor leak on Streamlit)
 _SESSION_KEYS: ContextVar[dict[str, str] | None] = ContextVar("amaris_session_keys", default=None)
 
 
 def use_session_keys(keys: dict[str, str]) -> None:
     """Bind caller-supplied API keys to this context. Pass {} to go back to the configured ones."""
     bound = {name: value.strip() for name, value in keys.items() if value and value.strip()}
-    # deliberately silent: observability.logging imports this module, so a logger here is a
-    # circular import — and a key value is the one thing that must never reach a log line anyway
+    # no logger here: circular import with observability/logging
     _SESSION_KEYS.set(bound)
 
 

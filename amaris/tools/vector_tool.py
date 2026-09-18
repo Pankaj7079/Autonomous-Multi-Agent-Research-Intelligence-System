@@ -13,12 +13,10 @@ from amaris.observability.logging import logger
 from amaris.observability.tool_trace import record
 
 COLLECTION = "amaris_research"
-# bge-small is 384-dim, the size this collection is already created with, so moving off
-# sentence-transformers needed no migration. fastembed runs it on ONNX and pulls no torch.
+# bge-small 384-dim ONNX via fastembed, no torch dependency
 EMBED_MODEL = "BAAI/bge-small-en-v1.5"
 VECTOR_SIZE = 384
-# a blip should not cost an attachment, but a Qdrant that is actually down must not turn
-# into a much longer wait than the caller already budgets for — 3 tries, then give up (ADR-049)
+# Qdrant connection retry: 3 tries then give up (ADR-049)
 RETRY_ATTEMPTS = 3
 RETRY_DELAY_S = 0.4
 
@@ -162,8 +160,7 @@ async def upsert_documents(
             PointStruct(
                 id=str(uuid.uuid4()),
                 vector=vector,
-                # extra keys ride along: attachments tag points with kind and created_ts for
-                # purge_stale_attachments, and dropping them here would lose that silently
+                # keep extra keys (kind, created_ts) for purge_stale_attachments
                 payload={
                     **doc,
                     "text": doc.get("text", ""),
@@ -241,8 +238,7 @@ async def search_knowledge_base(
             for point in response.points
         ]
     except Exception as exc:
-        # a collection that does not exist yet holds nothing, which is an answer, not a failure —
-        # it is the normal state on a fresh qdrant and the 404 body reads like a real error
+        # new collection = empty result, not error (normal on fresh Qdrant)
         if "doesn't exist" in str(exc) or "Not found" in str(exc):
             logger.bind(collection=collection).debug("vector.collection_missing")
             return []

@@ -20,11 +20,9 @@ from amaris.config.settings import get_settings
 from amaris.observability.logging import logger
 from amaris.observability.tool_trace import MCP, record
 
-# a cold `npx` or `uvx` start is seconds, and a server that cannot answer in this long is not
-# worth making a research run wait for
+# MCP server timeout: cold starts can be seconds
 CONNECT_TIMEOUT = 45.0
-# arxiv answers in seconds or 429s and retries internally for a minute; a research run
-# should not wait out someone else's backoff
+# ArXiv timeout: shouldn't wait out someone else's backoff
 CALL_TIMEOUT = 30.0
 # enough of a tool result to be evidence, without pasting a whole repository into a prompt
 RESULT_CHARS = 4000
@@ -68,8 +66,7 @@ def configured_servers(include_disabled: bool = False) -> list[ServerSpec]:
     specs: list[ServerSpec] = []
 
     root = (settings.mcp_filesystem_root or "").strip()
-    # never in cloud mode: a public Space answers questions from strangers, and a query-derived
-    # glob against the container filesystem is an enumeration primitive, not a research source
+    # no MCP in cloud mode: query-derived glob is an enumeration primitive
     if root and settings.is_cloud:
         logger.warning("mcp_client.filesystem_refused_in_cloud")
         root = ""
@@ -97,8 +94,7 @@ def configured_servers(include_disabled: bool = False) -> list[ServerSpec]:
 
     token = settings.key("github_token")
     if token:
-        # the npm server was deprecated; GitHub's own server is a Go binary or this remote
-        # endpoint, and the endpoint needs nothing installed (ADR-042)
+        # GitHub MCP: deprecated npm server → use Go binary or remote endpoint (ADR-042)
         specs.append(
             ServerSpec(
                 name="github",
@@ -192,8 +188,7 @@ async def call_tool(spec: ServerSpec, tool: str, arguments: dict[str, Any]) -> s
         chars=len(text),
         ms=round(elapsed, 1),
     ).info("mcp_client.called")
-    # arguments are not recorded: the github spec carries a bearer token in env and this list
-    # is rendered in the UI
+    # don't record MCP arguments (GitHub bearer token in env, rendered in UI)
     record(
         f"{spec.name}/{tool}",
         kind=MCP,
@@ -218,8 +213,7 @@ def _search_call(spec: ServerSpec, query: str) -> tuple[str, dict[str, Any]]:
         return "search_papers", {"query": query, "max_results": 3}
     if spec.name == "github":
         return "search_repositories", {"query": query}
-    # the filesystem server matches globs, not prose, so the longest word stands in for the
-    # query — weak by design, and it is why filesystem is off unless a root is configured
+    # filesystem MCP: longest word as proxy query (weak by design, off by default)
     words = sorted((w for w in query.split() if len(w) > 4), key=len, reverse=True)
     # the root is the last launch argument; "." resolves outside the server's allowed directory
     root = spec.args[-1] if spec.args else "."

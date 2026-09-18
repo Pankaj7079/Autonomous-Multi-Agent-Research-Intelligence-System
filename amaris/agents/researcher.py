@@ -148,8 +148,7 @@ class ResearcherAgent(BaseAgent):
             try:
                 decision = await self._decide(description, found, iteration, max_iterations, budget)
             except Exception as exc:
-                # provider errors surface here too, not just AgentError — one bad step must
-                # not lose the sources this task already gathered
+                # preserve partial sources on provider error
                 logger.bind(task_id=task_id, iteration=iteration, error=str(exc)[:150]).warning(
                     "researcher.react_failed"
                 )
@@ -198,8 +197,7 @@ class ResearcherAgent(BaseAgent):
         max_iterations: int,
         budget: Budget,
     ) -> ReActDecision:
-        # with one iteration there is no loop to reason about: the only useful first move is
-        # to search the task itself, so the reasoning call is skipped outright
+        # skip reasoning call when only one iteration — no loop to reason about
         if max_iterations == 1 and not found:
             return ReActDecision(action="search", action_input=description, sufficient=False)
 
@@ -226,8 +224,7 @@ class ResearcherAgent(BaseAgent):
         if not specs:
             return []
 
-        # the first task stands for the run: one call per server, not one per task, or a
-        # 5-task plan pays five cold `npx` starts
+        # one MCP call per server (not per task) to avoid repeated cold starts
         subject_query = str(tasks[0].get("description", "")) if tasks else query
         found = await asyncio.gather(
             *(search(spec, subject_query) for spec in specs), return_exceptions=True
@@ -263,8 +260,7 @@ class ResearcherAgent(BaseAgent):
 
         from amaris.tools.vector_tool import search_knowledge_base
 
-        # filtered by url, not session: the file was ingested under the conversation's id and
-        # this run has its own, so a session filter here matches nothing
+        # filter by url not session — ingested under conversation id, not this run
         urls = [str(item.get("url", "")) for item in attachments if item.get("url")]
         if not urls:
             return []
@@ -377,8 +373,7 @@ class ResearcherAgent(BaseAgent):
                 merged.append(source)
 
         scored = [{**item, "relevance": score_source(query, item)} for item in merged]
-        # an attached file is evidence the user chose deliberately, so it is never cut for
-        # scoring below the floor — that floor exists to drop junk search results
+        # user-attached files never dropped below relevance floor
         kept = [
             item
             for item in scored

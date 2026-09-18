@@ -17,8 +17,7 @@ THIN_SNIPPET_CHARS = 300
 
 _warned_missing = False
 
-# one browser for the whole process. the old code opened a fresh AsyncWebCrawler per url, so
-# every scrape paid 2-5s of chromium boot first and wikipedia timed out before it fetched anything
+# singleton browser: old code paid 2-5s chromium boot per URL
 _crawler: Any = None
 _start_lock = asyncio.Lock()
 
@@ -56,8 +55,7 @@ def _run_config(timeout_s: int) -> Any:
         override_navigator=True,
         # measured a GAIN from this one — cookie walls were being counted as the page
         remove_overlay_elements=True,
-        # no excluded_tags: stripping nav/header/aside cost groq.com 1177 of its 1790 chars,
-        # because modern sites put real content inside those landmarks
+        # don't strip nav/header/aside: real content lives in those landmarks
         page_timeout=timeout_s * 1000,
     )
 

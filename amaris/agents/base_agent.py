@@ -29,8 +29,7 @@ MAX_ATTEMPTS = 3
 BACKOFF_BASE_SECONDS = 0.5
 # floor so a chain a hair from expiring cannot spin the retry loop on near-zero waits
 MIN_RETRY_SLEEP_SECONDS = 0.25
-# what to wait after a rate limit when no provider is currently parked — a per-minute
-# window needs real time to clear, and the retry budget exists precisely to spend it
+# wait for per-minute window to clear after rate limit
 RATE_LIMIT_RETRY_SECONDS = 20.0
 
 

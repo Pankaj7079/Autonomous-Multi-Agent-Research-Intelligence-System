@@ -24,8 +24,7 @@ VISION_PROVIDER = "gemini"
 
 PDF_TYPES = ("application/pdf",)
 IMAGE_TYPES = ("image/png", "image/jpeg", "image/jpg", "image/webp")
-# PDF only for an upload. IMAGE_TYPES is still live below: a scanned PDF is rasterised into
-# pages and read through exactly that path, so removing it would take scanned PDFs with it
+# IMAGE_TYPES kept: scanned PDFs rasterize into pages through image path
 SUPPORTED_TYPES = PDF_TYPES
 
 # what the vision model is asked for — a description would be useless as a citable source
@@ -68,10 +67,7 @@ def chunk_text(text: str, size: int, overlap: int) -> list[str]:
             continue
         if current:
             chunks.append(current)
-        # a single paragraph longer than the budget is hard-split; nothing smarter to do.
-        # no overlap is applied here — it is added once, below, for every chunk alike.
-        # advancing by size-overlap here as well double-counted it and stored the same
-        # passage twice inside one chunk.
+        # hard-split oversized paragraphs; overlap logic explained (was double-counting)
         while len(piece) > size:
             chunks.append(piece[:size])
             piece = piece[size:]
@@ -160,8 +156,7 @@ async def vision_image(data: bytes, mime: str) -> str:
 
     from amaris.llm.router import configured_chain, get_llm
 
-    # groq and glm both reject image content outright, so vision pins gemini rather than
-    # taking whatever leads the chain and failing on the request
+    # vision pinned to Gemini: Groq/GLM reject image content
     if VISION_PROVIDER not in configured_chain():
         raise AttachmentError("no vision provider configured")
 
@@ -216,8 +211,7 @@ async def ingest(name: str, data: bytes, mime: str, session_id: str) -> dict[str
     scanned = False
     text = extract_pdf(data, settings.attachment_max_pages)
     if not text:
-        # no text layer means a scan, so the pages are rendered and read as images
-        # rather than handing the problem back to the user
+        # no text layer → render as images instead of failing silently
         scanned = True
         pages = rasterize_pdf(
             data, settings.attachment_max_scan_pages, settings.attachment_scan_scale
@@ -240,8 +234,7 @@ async def ingest(name: str, data: bytes, mime: str, session_id: str) -> dict[str
 
     # url doubles as the citation target, so it has to identify the file, not a web page
     url = f"file://{name}"
-    # tagged and timestamped so an abandoned upload can be swept later: a browser tab that is
-    # simply closed never reaches "start over" (ADR-045)
+    # tag + timestamp for abandoned upload sweep (ADR-045)
     now = time.time()
     stored = await upsert_documents(
         [

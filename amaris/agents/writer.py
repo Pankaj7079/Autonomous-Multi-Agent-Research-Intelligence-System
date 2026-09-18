@@ -16,12 +16,10 @@ if TYPE_CHECKING:
     from amaris.graph.state import GraphState
 
 SOURCE_CHARS = 500
-# the writer never reads more than this many sources however deep the run went: 20 x 500 chars
-# plus an 1100-word target was the one call that reliably timed out (ADR-041)
+# source cap: 20 x 500 chars + 1100-word target was the timeout threshold
 WRITER_SOURCE_CAP = 14
 
-# gpt-oss reaches for fullwidth brackets when citing, which no [n] matcher downstream finds.
-# it also tags them — 【1†source】 — so anything after the digits inside the pair is dropped
+# fix: gpt-oss fullwidth brackets 【1†source】 broke downstream [n] matching
 _CITATION_MARKER = re.compile(r"[【\[]\s*(\d+)\s*(?:†[^】\]]*)?[】\]]")
 # the same model emits 【—】 and 【†source】 with no number at all; they cite nothing, so they go
 _EMPTY_MARKER = re.compile(r"【[^】\d]*】")
@@ -73,9 +71,7 @@ Analysis:
 Numbered sources — cite only the numbers that support a claim you make:
 {sources}"""
 
-# the length instruction is the one thing that has to change with depth: the same
-# "shorter is better" line that keeps a direct answer tight is also what made
-# "explain in detail" come back just as short as the answer it was expanding
+# length instruction tied to depth — same "shorter is better" hurts "explain in detail"
 SHORT_RULE = """Length: about {words} words. Shorter is better than padded — stop when
 the question is answered rather than filling the space."""
 
@@ -89,8 +85,7 @@ summary either, because a summary is what they already had."""
 LONG_FROM_WORDS = 500
 
 _MARKER = re.compile(r"\[(\d+)\]")
-# the model's own reference list is dropped and rebuilt — it numbered entries correctly but
-# listed them in whatever order it wrote them, so a remapped report read [2] [1] [3]
+# rebuild reference list — model numbered correctly but listed out of order
 _REFERENCES = re.compile(r"\n#{1,6}\s*references\b.*", re.IGNORECASE | re.DOTALL)
 
 
@@ -108,8 +103,7 @@ def _renumber(report: str, citations: list[dict[str, Any]]) -> tuple[str, list[d
     by_index = {item["index"]: item for item in citations}
     body = _REFERENCES.sub("", report).rstrip()
 
-    # order comes from the body alone: a reference the model listed but never cited inline
-    # must not earn a number
+    # uncited entries don't earn a number
     order: list[int] = []
     for found in _MARKER.finditer(body):
         number = int(found.group(1))
@@ -239,6 +233,5 @@ class WriterAgent(BaseAgent):
             f"{source.get('content', '')[:SOURCE_CHARS]}"
             for citation, source in zip(citations, sources, strict=False)
         )
-        # the writer reads scraped pages and MCP output like every other agent, and was the one
-        # agent handed them unwrapped — an instruction inside a README is an injection here
+        # security: scraped/MCP output treated as untrusted (README injection risk)
         return wrap_untrusted(blocks)

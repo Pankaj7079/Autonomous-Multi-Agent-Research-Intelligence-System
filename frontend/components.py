@@ -91,8 +91,7 @@ def hero(chain: list[str]) -> None:
     )
 
 
-# the supervisor's two gates, and the three evaluation layers. both are structural facts with
-# no constant to read them from, so they are named here rather than buried in an f-string
+# named constants for supervisor gates and eval layers (no magic numbers)
 SUPERVISOR_GATES = 2
 EVAL_LAYERS = 3
 
@@ -172,8 +171,7 @@ def pipeline_flow(events: list[ProgressEvent]) -> None:
         counts[event.agent] = counts.get(event.agent, 0) + 1
     current = next((e.agent for e in reversed(events) if e.agent and e.agent != "supervisor"), "")
 
-    # a clarification run never enters the worker lane, so showing six pending boxes would
-    # read as a failed run rather than a question asked
+    # clarification runs: show "clarifying" not six pending boxes
     lane = CLARIFY_LANE if "clarify" in counts else WORKERS
 
     nodes = []
@@ -305,8 +303,7 @@ def verdict_banner(result: ResearchResult | None, error: str | None) -> None:
         return
 
     floor = get_settings().quality_approve_threshold
-    # the critic's own overall, not scores["overall"] — result_from_state prefixes every
-    # evaluator metric as eval_*, so that key never existed and this banner was always yellow
+    # critic overall score: result_from_state prefixes metrics with eval_
     overall = result.trace.quality_score
     revisions = result.trace.revision_count
     if overall >= floor:
@@ -429,8 +426,7 @@ def _decision_row(entry: dict[str, Any]) -> str:
     source = "LLM" if entry.get("llm_decided") else "rule"
     flag = ' <span class="diverged">diverged</span>' if chosen != expected else ""
 
-    # a settled decision still asks the model for a second opinion it cannot act on (ADR-050) —
-    # shown here so the audit is visible per-decision, not just as a suite-wide average
+    # second-opinion audit shown per-decision, not just as suite average
     audit = ""
     if entry.get("llm_called") and not entry.get("llm_decided"):
         if entry.get("shadow_error"):
@@ -599,8 +595,7 @@ def citation_audit(audit: dict[str, Any]) -> None:
     ratio = float(audit.get("grounded_ratio", 0.0))
     cells = [
         ("verified claims", f"{grounded}/{checked}", badge_class(ratio, 0.8) if checked else ""),
-        # prose with no figure or name in it cannot be checked without a model, and saying so is
-        # more honest than folding it into the score either way
+        # prose without figure/name can't be model-checked — honest about limits
         ("not checkable", str(audit.get("skipped", 0)), ""),
         ("cited sources", str(audit.get("cited_sources", 0)), ""),
         ("domains", str(audit.get("domains", 0)), ""),
@@ -681,8 +676,7 @@ def source_list(citations: list[dict[str, Any]], sources: list[dict[str, Any]]) 
         st.markdown("".join(rows), unsafe_allow_html=True)
 
 
-# 16px stroke glyphs rather than emoji: emoji pick up the platform's own colour and style,
-# which is the one thing a curated palette cannot control
+# SVG glyphs at 16px, not emoji: emoji picks up platform color/style
 ICONS = {
     "chain": "M6 10a4 4 0 0 1 0-6h2M10 6a4 4 0 0 1 0 6H8M6 8h4",
     "layers": "M8 2 2 5.5 8 9l6-3.5L8 2M2 10.5 8 14l6-3.5",
@@ -722,8 +716,7 @@ def provider_alert() -> None:
     chain = configured_chain()
     cooling = provider_status()
     ready = [name for name in chain if not cooling.get(name)]
-    # a run started against a fully parked chain crawls through retries and then fails;
-    # saying so up front is cheaper than watching it for nineteen minutes
+    # warn upfront when chain is parked (saves watching it fail for 19 minutes)
     if chain and not ready:
         st.error("every provider is rate limited — a run started now will crawl and likely fail.")
     elif chain and len(ready) < len(chain):

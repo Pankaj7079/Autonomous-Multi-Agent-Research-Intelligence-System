@@ -36,8 +36,7 @@ TERMINAL = ("done", "failed")
 # the websocket falls back to polling the job so a terminal event it missed still closes it
 WS_POLL_SECONDS = 5.0
 
-# create_task alone is not enough — without a strong reference the loop can collect a
-# running job mid-flight, and a 90 second pipeline is a very collectable task
+# strong ref needed to prevent loop from collecting running job
 _running: set[asyncio.Task[None]] = set()
 
 
@@ -61,8 +60,7 @@ async def _run_job(
     api_keys: dict[str, str] | None = None,
 ) -> None:
     """Drive the pipeline and mirror every node transition into the job store."""
-    # bound inside the task, not in the request handler: a task gets its own copy of the
-    # context, so one caller's key cannot reach another caller's job (ADR-037)
+    # per-job key isolation via task-local context (ADR-037)
     if api_keys:
         use_session_keys(api_keys)
     store = await get_job_store()
@@ -203,8 +201,7 @@ async def stream_progress(websocket: WebSocket, job_id: str) -> None:
         logger.bind(job_id=job_id).debug("api.ws_disconnected")
     finally:
         pump.cancel()
-        # CancelledError derives from BaseException, so suppress(Exception) let it escape
-        # into the ASGI app and print a traceback on every clean socket close
+        # CancelledError fix: suppress() prevents ASGI traceback on clean close
         with contextlib.suppress(asyncio.CancelledError, Exception):
             await pump
         with contextlib.suppress(Exception):

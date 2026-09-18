@@ -91,8 +91,7 @@ async def _prune_checkpoints(connection: Any) -> None:
         if not stale:
             return
 
-        # one thread at a time with fixed statements: pruning is rare and a handful of
-        # deletes is not worth building sql strings for
+        # pruning uses fixed SQL — rare operation, not worth dynamic queries
         for thread_id in stale:
             await connection.execute("DELETE FROM writes WHERE thread_id = ?", (thread_id,))
             await connection.execute("DELETE FROM checkpoints WHERE thread_id = ?", (thread_id,))

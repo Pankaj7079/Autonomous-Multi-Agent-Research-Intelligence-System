@@ -106,8 +106,7 @@ async def send_report(
         )
 
     if response.status_code >= 400:
-        # resend names the real problem (unverified sender, bad recipient) and the user
-        # cannot fix what they cannot see, so its text is passed through rather than hidden
+        # resend error passthrough: user sees real problem
         raise MailRefused(f"resend rejected the send ({response.status_code}): {response.text}")
 
     message_id = str(response.json().get("id", ""))

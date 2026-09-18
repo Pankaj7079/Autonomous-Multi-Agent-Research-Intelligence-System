@@ -18,8 +18,7 @@ if TYPE_CHECKING:
 
 # which model size a task needs: the researcher makes many short calls, the rest reason
 _TASK_TIER: dict[str, str] = {
-    # routing and triage are short structured decisions, so the 120b model buys nothing
-    # but latency — it was ~4s per hop for a one-word answer
+    # triage/routing use 40b model — 120b adds latency with no benefit
     "supervisor": "fast",
     "triage": "fast",
     "planning": "reasoning",
@@ -46,9 +45,7 @@ _TASK_TEMPERATURE: dict[str, float] = {
 
 _DEFAULT_TEMPERATURE = 0.3
 _REQUEST_TIMEOUT = 60
-# glm measured ~17s on a short prompt, so judge-sized prompts blow the shared 60s budget.
-# agent work gets a shorter ceiling: a 180s hang mid-run looks identical to a crash, and
-# there is nothing useful to wait for when the reply is that late.
+# agent timeout 180s (shorter than judge): long hangs look like crashes
 _GLM_REQUEST_TIMEOUT = 90
 _GLM_EVAL_REQUEST_TIMEOUT = 180
 
@@ -76,8 +73,7 @@ _RETRYABLE_MARKERS = (
     "connection",
     "503",
     "overloaded",
-    # gpt-oss emits a native tool call from a tool-shaped name in the react prompt and groq
-    # 400s it. json mode does not actually prevent it, so hop instead of losing the step.
+    # gpt-oss emits native tool calls from tool-shaped names → hop provider
     "tool_use_failed",
     # same shape: gpt-oss returns an empty generation and groq rejects it as invalid json
     "json_validate_failed",
@@ -113,8 +109,7 @@ _RATE_LIMIT_MARKERS = (
     "resource_exhausted",
     "resource exhausted",
 )
-# not every provider states a delay — glm 429s with code 1302 and no hint at all, and
-# treating that as unparked burned all three attempts in 2s of a 75s budget
+# GLM 429 gives no delay hint — don't treat it as immediately unparked
 _UNHINTED_RATE_LIMIT_COOLDOWN = 30.0
 _DAILY_COOLDOWN_SECONDS = 3600.0
 # sleeping the exact hint can land a hair early and 429 again
@@ -222,8 +217,7 @@ def _build_gemini(settings: Settings, task_type: str) -> BaseChatModel:
 def _build_glm(settings: Settings, task_type: str) -> BaseChatModel:
     from langchain_openai import ChatOpenAI
 
-    # langchain-openai, not langchain-community's ChatZhipuAI — that package sunset a
-    # per-provider class on us once already (ADR-018) and langchain-zhipuai is at 0.0.1
+    # use langchain-openai not ChatZhipuAI (per-provider classes sunset, ADR-018)
     return ChatOpenAI(
         model=settings.glm_model,
         api_key=settings.key("glm_api_key"),
@@ -254,8 +248,7 @@ _BUILDERS = {
     "anthropic": _build_anthropic,
 }
 
-# json mode asks for plain json text. it reduces but does not eliminate gpt-oss emitting a
-# native tool call, so tool_use_failed is also in _RETRYABLE_MARKERS as the real backstop.
+# JSON mode reduces but doesn't eliminate native tool calls from gpt-oss
 _JSON_MODE_BINDINGS: dict[str, dict[str, Any]] = {
     "groq": {"response_format": {"type": "json_object"}},
     # z.ai speaks the openai protocol and accepts json_object — verified against the live api
@@ -353,8 +346,7 @@ async def invoke_with_fallback(
                 provider=provider,
                 to=usable[position + 1],
                 reason=type(exc).__name__,
-                # the class name alone hides why a provider was dropped, and only the last
-                # provider in the chain ever reaches llm.failed where the text is logged
+                # log which provider was dropped and why in the failure message
                 error=str(exc)[:200],
                 parked_for=parked,
                 task=task_type,

@@ -6,10 +6,7 @@ import html
 
 import streamlit as st
 
-# warm paper ground, ink text, one deep-teal accent. Light on purpose: the page is read for
-# minutes at a time. Status colours are reserved for status and never used for decoration.
-# every text tone clears 4.5:1 on all three grounds — ghost used to be 2.20:1 on the sidebar,
-# which is why the small print under each heading was not really readable at all.
+# palette rationale: warm paper/ink, 4.5:1 contrast ratio (sidebar ghost was 2.20:1)
 TOKENS = {
     "bg": "#faf9f7",
     "bg-2": "#f2efea",
@@ -31,8 +28,7 @@ TOKENS = {
     "bad": "#be123c",
 }
 
-# below this a score is bad; the good floor comes from settings so the UI can never
-# call something green that the critic sent back for revision
+# bad-score color: floor comes from settings so UI never miscolors a revision
 WARN_FLOOR = 0.55
 
 SANS = "'Inter','Segoe UI Variable','Segoe UI',system-ui,-apple-system,sans-serif"
