@@ -488,6 +488,64 @@ def react_discipline(trace: RunTrace | None) -> None:
     )
 
 
+def _call_row(index: int, call: dict[str, Any]) -> str:
+    """One recorded call. Everything here is escaped — `target` is the user's own query."""
+    name = html.escape(str(call.get("tool", "?")))
+    if call.get("kind") == "mcp":
+        name = f'<b>{name}</b> <span class="diverged">mcp</span>'
+    ok = bool(call.get("ok", True))
+    chip = f'<span class="vchip {"good" if ok else "bad"}"><span class="dot"></span>'
+    chip += f"{'ok' if ok else 'failed'}</span>"
+    detail = html.escape(str(call.get("detail", "")))
+    return (
+        f"<tr><td>{index}</td>"
+        f"<td>{html.escape(str(call.get('agent', '-')))}</td>"
+        f"<td>{name}</td>"
+        f"<td><code>{html.escape(str(call.get('target', ''))) or '—'}</code></td>"
+        f"<td>{chip} {detail}</td>"
+        f"<td>{float(call.get('ms', 0.0)):.0f} ms</td></tr>"
+    )
+
+
+def tool_calls(trace: RunTrace | None) -> None:
+    """Every tool and MCP call the run made, in order.
+
+    The logs always carried these; nothing brought them to the reader, so the answer arrived
+    with no way to see what was actually fetched, or whether an MCP server answered at all.
+    """
+    if trace is None or not trace.tool_calls:
+        return
+
+    calls = trace.tool_calls
+    failed = sum(1 for call in calls if not call.get("ok", True))
+    mcp = sum(1 for call in calls if call.get("kind") == "mcp")
+    spent = sum(float(call.get("ms", 0.0)) for call in calls) / 1000
+
+    counts: dict[str, int] = {}
+    for call in calls:
+        key = str(call.get("tool", "?"))
+        counts[key] = counts.get(key, 0) + 1
+    breakdown = " · ".join(f"{name} x{n}" for name, n in sorted(counts.items()))
+
+    label("tool calls", f"{len(calls)}")
+    describe(
+        f"{breakdown} — {spent:.1f}s of tool time"
+        + (f", {mcp} of them to an MCP server" if mcp else ", no MCP server was reached")
+        + (
+            f". {failed} failed, which is survivable — a dead tool is a missing source, "
+            "never a failed run."
+            if failed
+            else ". Nothing failed."
+        )
+    )
+    rows = "".join(_call_row(i, call) for i, call in enumerate(calls, start=1))
+    st.markdown(
+        '<table class="tbl"><thead><tr><th>#</th><th>agent</th><th>tool</th>'
+        f"<th>against</th><th>result</th><th>took</th></tr></thead><tbody>{rows}</tbody></table>",
+        unsafe_allow_html=True,
+    )
+
+
 def critic_verdict(trace: RunTrace | None) -> None:
     """What the critic actually said, rather than only the number it produced."""
     if trace is None or not (trace.critic_feedback or trace.top_issue):

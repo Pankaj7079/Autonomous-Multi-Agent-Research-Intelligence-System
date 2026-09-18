@@ -10,6 +10,7 @@ from typing import Any, TypedDict
 
 from amaris.config.settings import get_settings
 from amaris.observability.logging import logger
+from amaris.observability.tool_trace import record
 
 COLLECTION = "amaris_research"
 # bge-small is 384-dim, the size this collection is already created with, so moving off
@@ -223,11 +224,19 @@ async def search_knowledge_base(
     finally:
         await client.close()
 
+    elapsed = (time.perf_counter() - started) * 1000
     logger.bind(
         tool="search_knowledge_base",
-        ms=round((time.perf_counter() - started) * 1000, 1),
+        ms=round(elapsed, 1),
         results=len(hits),
     ).debug("tool.call")
+    record(
+        "vector_search",
+        target=query,
+        ok=bool(hits),
+        ms=elapsed,
+        detail=f"{len(hits)} chunks from {collection}",
+    )
     return hits
 
 

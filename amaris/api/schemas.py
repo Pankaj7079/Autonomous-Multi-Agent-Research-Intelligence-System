@@ -131,6 +131,9 @@ class RunTrace(BaseModel):
     audit: dict[str, Any] = Field(default_factory=dict)
     # non-empty when the answer came from a data source rather than research (ADR-041)
     live: dict[str, Any] = Field(default_factory=dict)
+    # every tool and MCP call the run made, in order — the shape of each call, never its
+    # arguments or results (ADR-048)
+    tool_calls: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ResearchResult(BaseModel):
@@ -256,6 +259,7 @@ def result_from_state(state: GraphState) -> ResearchResult:
             sources=[_trim_source(item) for item in state["raw_research"]],
             audit=state.get("citation_audit") or {},
             live=state.get("live_data") or {},
+            tool_calls=state.get("tool_calls") or [],
             triage={
                 "depth": state.get("query_depth", ""),
                 "answerable": state.get("answerable", True),

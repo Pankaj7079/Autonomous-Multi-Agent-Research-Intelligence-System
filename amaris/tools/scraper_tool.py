@@ -7,6 +7,7 @@ import time
 from typing import Any
 
 from amaris.observability.logging import logger
+from amaris.observability.tool_trace import record
 
 SCRAPE_TIMEOUT = 25
 MAX_CHARS = 8000
@@ -105,6 +106,17 @@ async def _crawl(url: str, timeout_s: int = SCRAPE_TIMEOUT) -> str:
     return _extract_markdown(result)
 
 
+def _record(url: str, started: float, *, ok: bool, detail: str) -> None:
+    """Every outcome is recorded, not just the good one — a failed fetch is the interesting case."""
+    record(
+        "scrape_page",
+        target=url,
+        ok=ok,
+        ms=(time.perf_counter() - started) * 1000,
+        detail=detail,
+    )
+
+
 async def scrape_url(url: str, timeout_s: int = SCRAPE_TIMEOUT, max_chars: int = MAX_CHARS) -> str:
     """Page as markdown, capped. Returns "" on timeout, failure or a missing extra."""
     global _warned_missing
@@ -118,14 +130,17 @@ async def scrape_url(url: str, timeout_s: int = SCRAPE_TIMEOUT, max_chars: int =
         if not _warned_missing:
             logger.bind(tool="scrape_url").warning("tool.extra_missing")
             _warned_missing = True
+        _record(url, started, ok=False, detail="crawl4ai not installed")
         return ""
     except TimeoutError:
         logger.bind(tool="scrape_url", url=url[:120], timeout=timeout_s).warning("tool.timeout")
+        _record(url, started, ok=False, detail=f"timed out after {timeout_s}s")
         return ""
     except Exception as exc:
         # a browser that died takes the singleton with it, or every later scrape reuses a corpse
         await close_scraper()
         logger.bind(tool="scrape_url", url=url[:120], error=str(exc)[:200]).warning("tool.failed")
+        _record(url, started, ok=False, detail="browser error")
         return ""
 
     clipped = text.strip()[:max_chars]
@@ -135,6 +150,7 @@ async def scrape_url(url: str, timeout_s: int = SCRAPE_TIMEOUT, max_chars: int =
         ms=round((time.perf_counter() - started) * 1000, 1),
         chars=len(clipped),
     ).debug("tool.call")
+    _record(url, started, ok=bool(clipped), detail=f"{len(clipped)} chars")
     return clipped
 
 

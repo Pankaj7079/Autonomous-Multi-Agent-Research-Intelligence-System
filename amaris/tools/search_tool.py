@@ -9,6 +9,7 @@ from urllib.parse import urlparse, urlunparse
 
 from amaris.config.settings import get_settings
 from amaris.observability.logging import logger
+from amaris.observability.tool_trace import record
 
 DEFAULT_MAX_RESULTS = 8
 
@@ -127,11 +128,20 @@ async def smart_search(query: str, max_results: int = DEFAULT_MAX_RESULTS) -> li
         if len(merged) >= max_results:
             break
 
+    elapsed = round((time.perf_counter() - started) * 1000, 1)
+    engines = [name for name, hits in (("tavily", tavily), ("duckduckgo", ddg)) if hits]
     logger.bind(
         tool="smart_search",
         query=query[:80],
-        ms=round((time.perf_counter() - started) * 1000, 1),
+        ms=elapsed,
         results=len(merged),
-        engines=len([r for r in (tavily, ddg) if r]),
+        engines=len(engines),
     ).info("tool.call")
+    record(
+        "web_search",
+        target=query,
+        ok=bool(merged),
+        ms=elapsed,
+        detail=f"{len(merged)} results · {', '.join(engines) or 'no engine answered'}",
+    )
     return merged

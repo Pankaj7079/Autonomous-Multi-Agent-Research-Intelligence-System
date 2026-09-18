@@ -15,6 +15,7 @@ from typing import Any
 import httpx
 
 from amaris.observability.logging import logger
+from amaris.observability.tool_trace import record
 
 _GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search"
 _FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
@@ -126,6 +127,13 @@ async def current_weather(place: str) -> Weather | None:
             results = found.get("results") or []
             if not results:
                 logger.bind(tool="weather", place=name[:60]).info("tool.place_not_found")
+                record(
+                    "weather_api",
+                    target=name,
+                    ok=False,
+                    ms=(time.perf_counter() - started) * 1000,
+                    detail="place not found",
+                )
                 return None
             spot = results[0]
             data = await _get(
@@ -142,6 +150,13 @@ async def current_weather(place: str) -> Weather | None:
             )
     except Exception as exc:
         logger.bind(tool="weather", error=str(exc)[:200]).warning("tool.failed")
+        record(
+            "weather_api",
+            target=name,
+            ok=False,
+            ms=(time.perf_counter() - started) * 1000,
+            detail="lookup failed",
+        )
         return None
 
     current = data.get("current") or {}
@@ -170,11 +185,18 @@ async def current_weather(place: str) -> Weather | None:
             f"&current={_CURRENT}&timezone=auto"
         ),
     )
+    elapsed = (time.perf_counter() - started) * 1000
     logger.bind(
         tool="weather",
         place=reading.where[:80],
-        ms=round((time.perf_counter() - started) * 1000, 1),
+        ms=round(elapsed, 1),
     ).info("tool.complete")
+    record(
+        "weather_api",
+        target=reading.where,
+        ms=elapsed,
+        detail=f"{reading.temperature_c:.0f}°C · {reading.condition}",
+    )
     return reading
 
 

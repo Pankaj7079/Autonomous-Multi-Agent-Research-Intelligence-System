@@ -680,3 +680,70 @@ def test_no_text_in_the_depth_table_is_below_a_readable_size() -> None:
 
     tiny = [m for m in re.findall(r"font-size:\s*(0\.\d+)rem", _CSS) if float(m) < 0.62]
     assert not tiny, f"font sizes below 0.62rem are unreadable: {tiny}"
+
+
+def _call(**overrides):
+    base = {
+        "tool": "web_search",
+        "kind": "tool",
+        "agent": "researcher",
+        "target": "what is MCP",
+        "ok": True,
+        "ms": 412.4,
+        "detail": "8 results",
+        "at": "2026-09-17T12:00:00+00:00",
+    }
+    return {**base, **overrides}
+
+
+def test_the_tool_panel_names_every_call_and_who_made_it(fake: FakeStreamlit) -> None:
+    """The whole point: an answer used to arrive with no way to see what was fetched."""
+    components.tool_calls(_trace(tool_calls=[_call(), _call(tool="scrape_page", agent="analyst")]))
+
+    assert "web_search" in fake.drawn
+    assert "scrape_page" in fake.drawn
+    assert "researcher" in fake.drawn
+    assert "analyst" in fake.drawn
+
+
+def test_an_mcp_call_is_marked_so_it_is_not_mistaken_for_a_local_tool(
+    fake: FakeStreamlit,
+) -> None:
+    components.tool_calls(
+        _trace(tool_calls=[_call(tool="arxiv/search_papers", kind="mcp", target="stdio")])
+    )
+
+    assert "arxiv/search_papers" in fake.drawn
+    assert ">mcp<" in fake.drawn
+    assert "1 of them to an MCP server" in fake.drawn
+
+
+def test_a_run_that_reached_no_mcp_server_says_so_rather_than_staying_silent(
+    fake: FakeStreamlit,
+) -> None:
+    """Silence read as "MCP works"; it actually meant the client was switched off."""
+    components.tool_calls(_trace(tool_calls=[_call()]))
+
+    assert "no MCP server was reached" in fake.drawn
+
+
+def test_a_failed_call_is_shown_as_failed_not_dropped(fake: FakeStreamlit) -> None:
+    """A dead tool is the most interesting row on the table — hiding it hides the why."""
+    components.tool_calls(_trace(tool_calls=[_call(ok=False, detail="timed out after 25s")]))
+
+    assert "failed" in fake.drawn
+    assert "timed out after 25s" in fake.drawn
+
+
+def test_the_target_is_escaped_because_it_is_the_users_own_query(fake: FakeStreamlit) -> None:
+    """target carries the query verbatim into a table rendered with unsafe_allow_html."""
+    components.tool_calls(_trace(tool_calls=[_call(target="<img src=x onerror=alert(1)>")]))
+
+    assert "<img src=x" not in fake.drawn
+    assert "&lt;img" in fake.drawn
+
+
+def test_a_run_with_no_tool_calls_draws_nothing(fake: FakeStreamlit) -> None:
+    components.tool_calls(_trace(tool_calls=[]))
+
+    assert fake.drawn == ""

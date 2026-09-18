@@ -18,6 +18,7 @@ from typing import Any
 
 from amaris.config.settings import get_settings
 from amaris.observability.logging import logger
+from amaris.observability.tool_trace import MCP, record
 
 # a cold `npx` or `uvx` start is seconds, and a server that cannot answer in this long is not
 # worth making a research run wait for
@@ -158,6 +159,7 @@ async def call_tool(spec: ServerSpec, tool: str, arguments: dict[str, Any]) -> s
     never a failed run."""
     if spec.tools and tool not in spec.tools:
         logger.bind(server=spec.name, tool=tool).warning("mcp_client.tool_not_allowed")
+        record(f"{spec.name}/{tool}", kind=MCP, ok=False, detail="tool not on the allowed list")
         return ""
 
     started = time.perf_counter()
@@ -170,16 +172,36 @@ async def call_tool(spec: ServerSpec, tool: str, arguments: dict[str, Any]) -> s
             )
     except Exception as exc:
         logger.bind(server=spec.name, tool=tool, error=str(exc)[:200]).warning("mcp_client.failed")
+        # the transport, not the message: an exception string from a server is its text to write
+        record(
+            f"{spec.name}/{tool}",
+            kind=MCP,
+            target=spec.transport,
+            ok=False,
+            ms=(time.perf_counter() - started) * 1000,
+            detail="server unreachable or timed out",
+        )
         return ""
 
     parts = [str(getattr(item, "text", "")) for item in (result.content or [])]
     text = "\n".join(part for part in parts if part)[:RESULT_CHARS]
+    elapsed = (time.perf_counter() - started) * 1000
     logger.bind(
         server=spec.name,
         tool=tool,
         chars=len(text),
-        ms=round((time.perf_counter() - started) * 1000, 1),
+        ms=round(elapsed, 1),
     ).info("mcp_client.called")
+    # arguments are not recorded: the github spec carries a bearer token in env and this list
+    # is rendered in the UI
+    record(
+        f"{spec.name}/{tool}",
+        kind=MCP,
+        target=spec.transport,
+        ok=bool(text.strip()),
+        ms=elapsed,
+        detail=f"{len(text)} chars" if text.strip() else "no result",
+    )
     return text
 
 

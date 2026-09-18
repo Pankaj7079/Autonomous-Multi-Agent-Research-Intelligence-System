@@ -10,6 +10,7 @@ import time
 from typing import TypedDict
 
 from amaris.observability.logging import logger
+from amaris.observability.tool_trace import record
 
 EXEC_TIMEOUT = 10
 MAX_OUTPUT_CHARS = 4000
@@ -120,11 +121,20 @@ async def execute_python(code: str, timeout_s: int = EXEC_TIMEOUT) -> ExecutionR
     err = stderr.decode("utf-8", errors="replace")[:MAX_OUTPUT_CHARS]
     ok = process.returncode == 0
 
+    elapsed = (time.perf_counter() - started) * 1000
     logger.bind(
         tool="execute_python",
-        ms=round((time.perf_counter() - started) * 1000, 1),
+        ms=round(elapsed, 1),
         exit_code=process.returncode,
     ).debug("tool.call")
+    # the code itself is not recorded — it is model-written and can be long
+    record(
+        "run_python",
+        target=f"{len(code)} chars of code",
+        ok=ok,
+        ms=elapsed,
+        detail=f"exit {process.returncode} · {len(out)} chars out",
+    )
 
     return ExecutionResult(
         success=ok,

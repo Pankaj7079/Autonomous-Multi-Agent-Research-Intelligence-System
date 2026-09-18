@@ -18,7 +18,9 @@ from amaris.agents import (
 # GraphState must exist at runtime: langgraph resolves node annotations when compiling
 from amaris.graph.state import FINISH, GraphState
 from amaris.memory.episodic import add_session_summary
+from amaris.observability.context import agent_context
 from amaris.observability.logging import logger
+from amaris.observability.tool_trace import drain, start_recording
 from amaris.safety.guardrails import validate_output
 
 if TYPE_CHECKING:
@@ -41,6 +43,17 @@ LIVE_TEMPLATE = """## Answer
 [1] {title} — {url}"""
 
 
+def _tools_used(state: GraphState) -> dict[str, Any]:
+    """Fold the calls this node just made onto the ones already recorded. {} when it made none.
+
+    Returned as the whole list, like agent_path — GraphState has no reducers on purpose.
+    """
+    calls = drain()
+    if not calls:
+        return {}
+    return {"tool_calls": [*state.get("tool_calls", []), *calls]}
+
+
 async def _run_node(
     agent_class: type[BaseAgent], state: GraphState, track_path: bool = True
 ) -> dict[str, Any]:
@@ -48,6 +61,7 @@ async def _run_node(
     name = agent_class.name
     logger.bind(node=name).debug("node.start")
     started = time.perf_counter()
+    start_recording()
 
     try:
         update = await agent_class().run(state)
@@ -55,12 +69,13 @@ async def _run_node(
         elapsed = round((time.perf_counter() - started) * 1000, 1)
         logger.bind(node=name, ms=elapsed).exception("node.failed")
         # the supervisor reads error and routes to FINISH, so the run ends cleanly
-        return {"error": f"{name} failed: {exc}"}
+        return {"error": f"{name} failed: {exc}", **_tools_used(state)}
 
     # agent_path is "who actually ran": with forced hops as direct edges, the supervisor no
     # longer sees every step, so each node has to record its own
     if track_path:
         update["agent_path"] = [*state["agent_path"], name]
+    update.update(_tools_used(state))
 
     logger.bind(node=name, ms=round((time.perf_counter() - started) * 1000, 1)).info(
         "node.complete"
@@ -97,11 +112,19 @@ async def live_node(state: GraphState) -> dict[str, Any]:
     """
     from amaris.tools.weather_tool import current_weather
 
+    # this node calls a tool without going through _run_node, so it records its own — and
+    # binds its name, or the call shows up in the table with no agent against it
+    start_recording()
     place = str((state["live_data"] or {}).get("place", ""))
-    reading = await current_weather(place)
+    with agent_context("live"):
+        reading = await current_weather(place)
     if reading is None:
         logger.bind(place=place[:60]).info("live.fell_back_to_research")
-        return {"live_data": {}, "agent_path": [*state["agent_path"], "live"]}
+        return {
+            "live_data": {},
+            "agent_path": [*state["agent_path"], "live"],
+            **_tools_used(state),
+        }
 
     summary = reading.summary()
     title = f"Open-Meteo — current conditions for {reading.where}"
@@ -124,6 +147,7 @@ async def live_node(state: GraphState) -> dict[str, Any]:
         "live_data": {**state["live_data"], "source": "Open-Meteo", "observed": reading.observed},
         "next_agent": FINISH,
         "agent_path": [*state["agent_path"], "live"],
+        **_tools_used(state),
     }
 
 

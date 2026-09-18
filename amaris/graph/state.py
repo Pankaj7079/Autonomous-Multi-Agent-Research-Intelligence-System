@@ -99,6 +99,10 @@ class GraphState(TypedDict):
     # loguru sees every ReAct step, but only this survives to be scored after the run ends
     react_stats: dict[str, dict[str, Any]]
 
+    # every tool and MCP call, in order: {tool, kind, agent, target, ok, ms, detail, at}.
+    # the logs always had these; nothing carried them to the reader (ADR-048)
+    tool_calls: list[dict[str, Any]]
+
     # evaluator
     final_report: str
     evaluation_scores: dict[str, float]
@@ -157,6 +161,7 @@ def new_state(
         agent_path=[],
         decision_log=[],
         react_stats={},
+        tool_calls=[],
         final_report="",
         evaluation_scores={},
         citation_audit={},

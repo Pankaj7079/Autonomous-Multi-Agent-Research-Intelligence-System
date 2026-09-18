@@ -29,6 +29,7 @@ from frontend.components import (
     score_dashboard,
     source_list,
     stat_strip,
+    tool_calls,
     verdict_banner,
 )
 
@@ -68,6 +69,7 @@ def _execution_tab(result: ResearchResult, events: list[ProgressEvent]) -> None:
 
     decision_trace(result.trace)
     react_discipline(result.trace)
+    tool_calls(result.trace)
     critic_verdict(result.trace)
 
     label("event stream", f"{len(events)}")
